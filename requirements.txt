@@ -1,0 +1,2 @@
+setuptools==69.2.0
+wheel @ file:///opt/homebrew/Cellar/python%403.12/3.12.7_1/libexec/wheel-0.44.0-py3-none-any.whl#sha256=c01326144883c50263d6967d1145640f3bbc8dfab32c2cbe817ef61d7a810219

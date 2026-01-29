@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "bson": "^6.2.0",
+    "bson-objectid": "^2.0.4"
+  }
+}
