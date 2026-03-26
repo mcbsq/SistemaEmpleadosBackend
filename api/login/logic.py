@@ -1,44 +1,51 @@
-from flask import jsonify, request
+# api/login/logic.py
+from flask import jsonify
 from werkzeug.security import check_password_hash
 from flask_jwt_extended import create_access_token
+from bson.objectid import ObjectId
 import logging
 
-#LOGIN
-
-# Función para manejar el proceso de inicio de sesión de los usuarios
 def login(mongo, user, password):
     try:
-        logging.debug(f"Intento de login - Usuario: {user}")
-        
         if not user or not password:
-            logging.debug("Falta usuario o contraseña")
             return jsonify({"error": "Falta usuario o contraseña"}), 400
 
-        # Buscar el usuario en la base de datos
         usuario_db = mongo.db.usuario.find_one({'user': user})
-        
-        if usuario_db:
-            logging.debug("Usuario encontrado en la base de datos")
-            if check_password_hash(usuario_db['password'], password):
-                logging.debug("Contraseña correcta")
-                # Crear token con la información del usuario
-                access_token = create_access_token(identity={
-                    'user': user,
-                    'role': usuario_db.get('role', 'USER')
-                })
-                
-                return jsonify({
-                    'access_token': access_token,
-                    'role': usuario_db.get('role', 'USER'),
-                    'message': "Inicio de sesión exitoso"
-                }), 200
-            else:
-                logging.debug("Contraseña incorrecta")
-                return jsonify({"error": "Credenciales incorrectas"}), 401
-        else:
-            logging.debug("Usuario no encontrado")
+
+        if not usuario_db:
             return jsonify({"error": "Credenciales incorrectas"}), 401
-            
+
+        if not check_password_hash(usuario_db['password'], password):
+            return jsonify({"error": "Credenciales incorrectas"}), 401
+
+        role       = usuario_db.get('role', 'EMPLOYEE')
+        empleado_id = str(usuario_db['empleado_id']) if usuario_db.get('empleado_id') else None
+        depto_id    = None
+
+        # Si el usuario tiene empleado_id, buscar su departamento en la colección rh
+        if empleado_id:
+            rh_doc = mongo.db.rh.find_one({'empleado_id': empleado_id})
+            if rh_doc:
+                depto_id = str(rh_doc.get('depto_id', '')) or None
+
+        # Crear token JWT con identidad completa
+        access_token = create_access_token(identity={
+            'user':        user,
+            'role':        role,
+            'empleado_id': empleado_id,
+            'depto_id':    depto_id,
+        })
+
+        logging.info(f"Login exitoso: {user} ({role})")
+
+        return jsonify({
+            'access_token': access_token,
+            'role':         role,
+            'empleado_id':  empleado_id,
+            'depto_id':     depto_id,
+            'message':      'Inicio de sesión exitoso',
+        }), 200
+
     except Exception as e:
         logging.error(f"Error en login: {str(e)}")
         return jsonify({"error": "Error al conectar con el servidor"}), 500
