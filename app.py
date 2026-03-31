@@ -17,21 +17,7 @@ app = Flask(__name__)
 # 3. CONFIGURACIÓN DE CORS (ADECUADA PARA EVITAR "FAILED TO FETCH")
 # Hemos añadido "Accept" y "Authorization" a los headers permitidos 
 # y asegurado que los puertos 3000 y 3001 tengan acceso total.
-CORS(app, resources={
-    r"/*": {
-        "origins": [
-            "http://localhost:3000", 
-            "http://localhost:3001", 
-            "http://127.0.0.1:3000", 
-            "http://127.0.0.1:3001", 
-            "http://51.79.18.52", 
-            "http://qa.redcibercom.com"
-        ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "Accept", "X-Requested-With"],
-        "supports_credentials": True
-    }
-})
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # 4. CONFIGURACIÓN DE MONGODB Y JWT
 app.config['MONGO_URI'] = 'mongodb+srv://cibercom:proyectos2022@cluster0.ilngp.mongodb.net/controlempleados?retryWrites=true&w=majority'
