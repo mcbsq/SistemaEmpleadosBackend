@@ -1,92 +1,86 @@
 # api/usuario/logic.py
 from flask import jsonify, request
-from werkzeug.security import generate_password_hash, check_password_hash
 from bson.objectid import ObjectId
-from bson.json_util import dumps
-from pymongo.errors import PyMongoError
-from flask import current_app
+from bson.errors import InvalidId
+from werkzeug.security import generate_password_hash
 import logging
 
-ROLES_VALIDOS = {'SUPER_ADMIN', 'ADMIN', 'EMPLOYEE'}
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-def usuario_existente(mongo, user):
+def _serialize(doc):
+    """Convierte ObjectId a string para que jsonify pueda serializarlo."""
+    if doc is None:
+        return None
+    doc['_id'] = str(doc['_id'])
+    if doc.get('empleado_id') and not isinstance(doc['empleado_id'], str):
+        doc['empleado_id'] = str(doc['empleado_id'])
+    # Nunca enviar el hash de contraseña al frontend
+    doc.pop('password', None)
+    return doc
+
+
+def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE'):
     try:
-        return mongo.db.usuario.find_one({'user': user}) is not None
-    except PyMongoError as e:
-        current_app.logger.error(f"Error buscando usuario: {e}")
-        return False
+        nuevo = {
+            'user':        user,
+            'password':    generate_password_hash(password),
+            'role':        role,
+            'empleado_id': empleado_id,
+        }
+        result = mongo.db.usuario.insert_one(nuevo)
+        return jsonify({
+            'message': 'Usuario creado',
+            '_id':     str(result.inserted_id),
+            'user':    user,
+            'role':    role,
+        }), 201
+    except Exception as e:
+        logging.error(f"Error creando usuario: {e}")
+        return jsonify({'error': str(e)}), 500
 
-def not_found():
-    return jsonify({'message': 'Recurso no encontrado', 'status': 404}), 404
 
-# ─── CREATE ───────────────────────────────────────────────────────────────────
-def create_usuario(mongo, user, password, empleado_id):
-    if usuario_existente(mongo, user):
-        return jsonify({'error': 'El usuario ya existe.'}), 400
-
-    if not user or not password:
-        return not_found()
-
-    # El role viene del body — por defecto EMPLOYEE
-    # Esto permite crear ADMIN desde el panel de SUPER_ADMIN
-    role = request.json.get('role', 'EMPLOYEE')
-    if role not in ROLES_VALIDOS:
-        role = 'EMPLOYEE'
-
-    hashed_password = generate_password_hash(password)
-
-    result = mongo.db.usuario.insert_one({
-        'user':        user,
-        'password':    hashed_password,
-        'empleado_id': empleado_id,
-        'role':        role,
-    })
-
-    return jsonify({
-        '_id':  str(result.inserted_id),
-        'user': user,
-        'role': role,
-    }), 201
-
-# ─── Crear Super Admin (usada en arranque) ────────────────────────────────────
-def create_super_admin(mongo):
-    if mongo.db.usuario.find_one({'role': 'SUPER_ADMIN'}):
-        return False
-    hashed_password = generate_password_hash('admin123')
-    mongo.db.usuario.insert_one({
-        'user':        'admin',
-        'password':    hashed_password,
-        'role':        'SUPER_ADMIN',
-        'empleado_id': None,
-    })
-    logging.info("Super Admin 'admin' creado.")
-    return True
-
-# ─── GET todos ────────────────────────────────────────────────────────────────
 def get_usuarios(mongo):
-    usuarios = mongo.db.usuario.find()
-    return dumps(usuarios), 200
+    try:
+        docs = list(mongo.db.usuario.find({}))
+        return jsonify([_serialize(d) for d in docs]), 200
+    except Exception as e:
+        logging.error(f"Error obteniendo usuarios: {e}")
+        return jsonify({'error': str(e)}), 500
 
-# ─── GET por ID ───────────────────────────────────────────────────────────────
+
 def get_usuario(mongo, id):
-    usuario = mongo.db.usuario.find_one({'_id': ObjectId(id)})
-    if not usuario:
-        return not_found()
-    return dumps(usuario), 200
+    try:
+        doc = mongo.db.usuario.find_one({'_id': ObjectId(id)})
+        if not doc:
+            return jsonify({'error': 'Usuario no encontrado'}), 404
+        return jsonify(_serialize(doc)), 200
+    except (InvalidId, Exception) as e:
+        return jsonify({'error': str(e)}), 400
 
-# ─── PUT ──────────────────────────────────────────────────────────────────────
-def update_usuario(mongo, id, user, password):
-    if not user or not password:
-        return not_found()
-    hashed_password = generate_password_hash(password)
-    mongo.db.usuario.update_one(
-        {'_id': ObjectId(id)},
-        {'$set': {'user': user, 'password': hashed_password}}
-    )
-    return jsonify({'message': f'Usuario {id} actualizado'}), 200
 
-# ─── DELETE ───────────────────────────────────────────────────────────────────
+def update_usuario(mongo, id, user=None, password=None, role=None):
+    try:
+        update = {}
+        if user:     update['user']     = user
+        if password: update['password'] = generate_password_hash(password)
+        if role:     update['role']     = role
+
+        if not update:
+            return jsonify({'error': 'Nada que actualizar'}), 400
+
+        mongo.db.usuario.update_one({'_id': ObjectId(id)}, {'$set': update})
+        return jsonify({'message': 'Usuario actualizado'}), 200
+    except Exception as e:
+        logging.error(f"Error actualizando usuario: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 def delete_usuario(mongo, id):
-    mongo.db.usuario.delete_one({'_id': ObjectId(id)})
-    return jsonify({'message': f'Usuario {id} eliminado'}), 200
+    try:
+        mongo.db.usuario.delete_one({'_id': ObjectId(id)})
+        return jsonify({'message': 'Usuario eliminado'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def usuario_existente(mongo, user):
+    return mongo.db.usuario.find_one({'user': user}) is not None

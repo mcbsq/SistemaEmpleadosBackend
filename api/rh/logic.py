@@ -1,156 +1,127 @@
+# api/rh/logic.py
 from flask import jsonify, request, Response
 from bson import json_util
 from bson.objectid import ObjectId
+from bson.errors import InvalidId
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def json_handler(obj):
-    """Manejador para la serialización JSON que maneja ObjectId."""
-    if isinstance(obj, ObjectId):
-        return str(obj)
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+def _serialize(doc):
+    if not doc:
+        return None
+    doc['_id']         = str(doc['_id'])
+    doc['empleado_id'] = str(doc['empleado_id'])
+    return doc
 
-######################################################
 
-#RECURSOS HUMANOS
-
-# Función para crear o actualizar información de RH para un empleado específico
-def create_rh(mongo, empleado_id, rh_data): 
-    if request.is_json: 
-        data = request.get_json() 
-        # Extrae los datos de RH del cuerpo de la solicitud
-        Puesto = data.get('Puesto', '') 
-        JefeInmediato = data.get('JefeInmediato', '') 
-        HorarioLaboral = data.get('HorarioLaboral', '') 
-        ExpedienteDigitalPDF = data.get('ExpedienteDigitalPDF', '') 
- 
-        # Convierte el ID del empleado a ObjectId para MongoDB
-        empleado_id = ObjectId(data.get('empleado_id', '')) 
-         
-        # Prepara el documento con los datos de RH 
-        rh_data = { 
-            'empleado_id': empleado_id, 
-            'Puesto': Puesto, 
-            'JefeInmediato': JefeInmediato, 
-            'HorarioLaboral': HorarioLaboral, 
-            'ExpedienteDigitalPDF': ExpedienteDigitalPDF 
-        } 
- 
-        # Inserta o actualiza el documento en la base de datos
-        id = mongo.db.rh.insert_one(rh_data) 
- 
-        # Devuelve una respuesta con los datos insertados/actualizados
-        response = jsonify({ 
-            '_id': str(id.inserted_id), 
-            'empleado_id': str(empleado_id), 
-            'Puesto': Puesto, 
-            'JefeInmediato': JefeInmediato, 
-            'HorarioLaboral': HorarioLaboral, 
-            'ExpedienteDigitalPDF': ExpedienteDigitalPDF 
-        }) 
- 
-        response.status_code = 201 
-        return response 
-    # Devuelve un error si la solicitud no es JSON o falta información
-    return jsonify({'error': 'No data provided'}), 400 
-
-def obtener_lista_de_empleados(mongo):
-    empleados = mongo.db.empleados.find()
-    empleados_list = list(empleados)  # Convertir el cursor a una lista de Python
-    return empleados_list
-
-# Función para obtener todos los registros de RH
+# ── GET todos ─────────────────────────────────────────────────────────────────
 def get_rhs(mongo):
-    rhs = mongo.db.rh.find()
-    rh_list = list(rhs)  # Convertir el cursor a una lista de Python
-    
-    empleados = obtener_lista_de_empleados(mongo)  # Obtener la lista de empleados
-    
-    for rhs in rh_list:
-        empleado_id = rhs.get("empleado_id")
-        empleado_nombre = None
-        for empleado in empleados:
-            if str(empleado.get("_id")) == str(empleado_id):
-                empleado_nombre = f"{empleado.get('Nombre')} {empleado.get('ApelPaterno')} {empleado.get('ApelMaterno')}"
-                break
-        
-        if empleado_nombre:
-            rhs["NombreCompleto"] = empleado_nombre  # Agregar el nombre completo al dato de contacto
-        else:
-            rhs["NombreCompleto"] = ""  # Si no se encuentra el empleado, establecer el nombre completo como una cadena vacía
-    
-    response = json_util.dumps(rh_list)
-    return Response(response, mimetype="application/json")
+    try:
+        rh_list = list(mongo.db.rh.find())
+        empleados = {str(e['_id']): f"{e.get('Nombre','')} {e.get('ApelPaterno','')} {e.get('ApelMaterno','')}"
+                     for e in mongo.db.empleados.find()}
+        for doc in rh_list:
+            doc['NombreCompleto'] = empleados.get(str(doc.get('empleado_id', '')), '')
+        return Response(json_util.dumps(rh_list), mimetype="application/json")
+    except Exception as e:
+        logger.error(f"Error en get_rhs: {e}")
+        return jsonify({'error': str(e)}), 500
 
-# Función para obtener información de RH de un empleado específico por ID
-def get_rh_by_empleado_id(mongo,empleado_id):
-    rh_data = mongo.db.rh.find_one({'empleado_id': ObjectId(empleado_id)}) 
-     
-    if rh_data: 
-        # Convierte ObjectId a str para JSON serialization 
-        rh_data['_id'] = str(rh_data['_id']) 
-        rh_data['empleado_id'] = str(rh_data['empleado_id']) 
-         
-        return jsonify(rh_data) 
-     
-    return jsonify({'error': 'Rh data not found for empleado_id {}'.format(empleado_id)}), 404
 
-# Función para eliminar información de RH de un empleado específico por ID
-def delete_rh_by_empleado_id(mongo,empleado_id):
-    result = mongo.db.rh.delete_one({'empleado_id': ObjectId(empleado_id)}) 
-     
-    if result.deleted_count > 0: 
-        response = jsonify({'message': f'Recurso Humano for empleado_id {empleado_id} Deleted Successfully'}) 
-        response.status_code = 200 
-        return response 
-    else: 
-        return jsonify({'error': f'Rh data not found for empleado_id {empleado_id}'}), 404
+# ── GET por empleado ──────────────────────────────────────────────────────────
+def get_rh_by_empleado_id(mongo, empleado_id):
+    try:
+        doc = mongo.db.rh.find_one({'empleado_id': ObjectId(empleado_id)})
+        if not doc:
+            return jsonify({}), 200   # vacío → el perfil usa fallback, no rompe
+        return jsonify(_serialize(doc)), 200
+    except (InvalidId, Exception) as e:
+        return jsonify({'error': str(e)}), 500
 
-# Función para actualizar información de RH de un empleado específico
+
+# ── CREATE ────────────────────────────────────────────────────────────────────
+def create_rh(mongo, empleado_id, rh_data):
+    if not request.is_json:
+        return jsonify({'error': 'No data provided'}), 400
+    try:
+        data = request.get_json()
+        eid  = ObjectId(data.get('empleado_id', empleado_id))
+
+        payload = _build_payload(eid, data)
+        result  = mongo.db.rh.insert_one(payload)
+
+        return jsonify({'_id': str(result.inserted_id), 'message': 'RH creado'}), 201
+    except Exception as e:
+        logger.error(f"Error en create_rh: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ── UPDATE — upsert real ──────────────────────────────────────────────────────
+# FIX PRINCIPAL:
+#   · El original hacía find_one primero y devolvía 404 si no existía.
+#     Eso hacía que el primer guardado desde el perfil siempre fallara.
+#   · Ahora usa update_one con upsert=True → crea el documento si no existe.
+#   · El PDF (ExpedienteDigitalPDF) puede llegar como array de use-file-picker
+#     [{content: "data:...", name: "..."}] — se normaliza antes de guardar.
 def update_rh(mongo, empleado_id, rh_data):
-    # Obtener el documento RH actual 
-    rh_data = mongo.db.rh.find_one({'empleado_id': ObjectId(empleado_id)}) 
- 
-    if rh_data: 
-        # Campos del documento actual 
-        current_puesto = rh_data.get('Puesto', '') 
-        current_jefe_inmediato = rh_data.get('JefeInmediato', '') 
-        current_horario_laboral = rh_data.get('HorarioLaboral', {}) 
-        current_expediente_digital_pdf = rh_data.get('ExpedienteDigitalPDF', '') 
- 
-        # Campos a actualizar 
-        Puesto = request.json.get('Puesto', current_puesto) 
-        JefeInmediato = request.json.get('JefeInmediato', current_jefe_inmediato) 
-        HorarioLaboral = request.json.get('HorarioLaboral', current_horario_laboral) 
-        ExpedienteDigitalPDF = request.json.get('ExpedienteDigitalPDF', current_expediente_digital_pdf) 
- 
-        # Actualizar el documento RH con los campos proporcionados 
-        result = mongo.db.rh.update_one( 
-            {'empleado_id': ObjectId(empleado_id)}, 
-            {'$set': { 
-                'Puesto': Puesto, 
-                'JefeInmediato': JefeInmediato, 
-                'HorarioLaboral': HorarioLaboral, 
-                'ExpedienteDigitalPDF': ExpedienteDigitalPDF 
-            }} 
+    try:
+        data = request.get_json(silent=True) or {}
+        eid  = ObjectId(empleado_id)
+
+        payload = _build_payload(eid, data)
+
+        mongo.db.rh.update_one(
+            {'empleado_id': eid},
+            {'$set': payload},
+            upsert=True,         # ← crea si no existe, actualiza si existe
         )
 
-        if result.modified_count > 0: 
-            response = jsonify({'message': f'Recurso Humano with empleado_id {empleado_id} updated successfully'}) 
-            response.status_code = 200 
-        else: 
-            response = jsonify({'error': 'No matching Recurso Humano found'}) 
-            response.status_code = 404 
- 
-        return response 
-    else: 
-        return jsonify({'error': 'Recurso Humano not found'}), 404
-    
-########################################################
-def not_found(error=None):
-    message = {
-        'message': 'Resource Not Found: ' + request.url,
-        'status': 404
+        return jsonify({'message': f'RH actualizado para empleado {empleado_id}'}), 200
+
+    except (InvalidId, Exception) as e:
+        logger.error(f"Error en update_rh: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ── DELETE ────────────────────────────────────────────────────────────────────
+def delete_rh_by_empleado_id(mongo, empleado_id):
+    try:
+        result = mongo.db.rh.delete_one({'empleado_id': ObjectId(empleado_id)})
+        if result.deleted_count > 0:
+            return jsonify({'message': f'RH eliminado para empleado {empleado_id}'}), 200
+        return jsonify({'error': 'No encontrado'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Helper interno ────────────────────────────────────────────────────────────
+def _build_payload(eid, data):
+    """Construye el documento a guardar normalizando el PDF."""
+
+    # El PDF puede llegar como:
+    #   · string base64/data-URL  (guardado desde MongoDB)
+    #   · array [{content: "data:...", name: "..."}]  (use-file-picker)
+    #   · None / ""
+    pdf_raw = data.get('ExpedienteDigitalPDF')
+    if isinstance(pdf_raw, list) and len(pdf_raw) > 0:
+        first = pdf_raw[0]
+        pdf   = first.get('content') or first if isinstance(first, dict) else first
+    else:
+        pdf = pdf_raw or None
+
+    return {
+        'empleado_id':        eid,
+        'Puesto':             data.get('Puesto',             ''),
+        'JefeInmediato':      data.get('JefeInmediato',      ''),
+        'JefeInmediato_id':   data.get('JefeInmediato_id',   ''),
+        'HorarioLaboral':     data.get('HorarioLaboral',     {
+            'HoraEntrada':    '',
+            'HoraSalida':     '',
+            'TiempoComida':   '',
+            'DiasTrabajados': '',
+        }),
+        'NombreCompleto':     data.get('NombreCompleto',     ''),
+        'ExpedienteDigitalPDF': pdf,
     }
-    response = jsonify(message)
-    response.status_code = 404
-    return response
