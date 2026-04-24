@@ -54,7 +54,9 @@ def create_empleado(mongo):
 # --- GET TODOS ---
 def get_empleados(mongo):
     try:
-        empleados = list(mongo.db.empleados.find())
+        empleados = list(mongo.db.empleados.find(
+         {"estado": {"$ne": "pendiente"}}
+     ))
         formatted = []
         for e in empleados:
             formatted.append({
@@ -112,3 +114,43 @@ def update_empleado(id, mongo):
         return jsonify({'message': 'Actualizado exitosamente'}), 200
     except Exception as e:
         return jsonify({'message': 'Error al actualizar', 'error': str(e)}), 400
+    
+def get_empleados_sin_pendientes(mongo):
+    """
+    Retorna todos los empleados EXCEPTO los que tienen estado='pendiente'.
+    Úsala como reemplazo del find() original en get_empleados.
+    """
+    from flask import jsonify
+    from bson import json_util
+    from bson.objectid import ObjectId
+    import logging
+ 
+    try:
+        empleados = list(mongo.db.empleados.find(
+            {"estado": {"$ne": "pendiente"}}
+        ))
+        return empleados
+    except Exception as e:
+        logging.error(f"Error en get_empleados_sin_pendientes: {e}")
+        raise
+ 
+ 
+def aprobar_empleado(mongo, empleado_id):
+    """
+    Cambia estado='pendiente' → estado='activo'.
+    Llamar desde un endpoint PATCH /empleados/<id>/aprobar (solo ADMIN/SUPER_ADMIN).
+    """
+    from flask import jsonify
+    from bson.objectid import ObjectId
+    from bson.errors import InvalidId
+ 
+    try:
+        result = mongo.db.empleados.update_one(
+            {"_id": ObjectId(empleado_id), "estado": "pendiente"},
+            {"$set": {"estado": "activo"}}
+        )
+        if result.modified_count == 0:
+            return jsonify({"error": "Empleado no encontrado o ya estaba activo"}), 404
+        return jsonify({"message": f"Empleado {empleado_id} aprobado"}), 200
+    except (InvalidId, Exception) as e:
+        return jsonify({"error": str(e)}), 400
