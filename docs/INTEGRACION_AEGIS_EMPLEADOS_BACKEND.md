@@ -212,6 +212,51 @@ Si `BASE_URL` + `TENANT_ID` + `APP_ID` están definidos y `AEGIS_DISABLED` no es
 
 **`seed.py`:** con `AEGIS_API_KEY` definida crea usuarios en Aegis y en Mongo (`email`, `aegis_user_id`, sin `password`). Correo por cuenta: campo opcional `email` en `CUENTAS` o `{user}@redcibercom.com.mx` vía `SEED_EMAIL_DOMAIN` (default `redcibercom.com.mx`). Sin API key pero con login Aegis, el seed **no** crea usuarios y muestra un aviso.
 
+### Ejemplo (PowerShell) — activar Aegis localmente sin commitear secretos
+
+> **No** pegues la API key en archivos del repo. Pásala por variables de entorno o por un secret manager.
+
+```powershell
+# Configura Aegis (IdP) para este backend
+$env:AEGIS_BASE_URL="https://auth.tu-dominio.com"
+$env:AEGIS_TENANT_ID="cibercom"
+$env:AEGIS_APP_ID="empleados"
+
+# API key con scopes admin (p. ej. users:manage) para alta/reset desde este backend
+$env:AEGIS_API_KEY="ak_test_REEMPLAZAR_POR_TU_KEY"
+
+# Opcionales
+$env:AEGIS_TIMEOUT="15"
+$env:AEGIS_LEGACY_LOGIN_FALLBACK="false"   # true solo mientras migras
+$env:AEGIS_DISABLED="false"
+
+# (Opcional) URI de Mongo si no usas la embebida en app.py / seed.py
+# $env:MONGO_URI="mongodb+srv://..."
+
+# Crear cuentas demo (Aegis + Mongo, según modo) y levantar backend
+python seed.py
+python app.py
+```
+
+### Ejemplo (`.env` local) — alternativa a PowerShell
+
+Si prefieres un archivo `.env`, úsalo **solo en tu máquina** y asegúrate de que esté **ignorado por git** (por ejemplo en `.gitignore`: `.env`, `.env.local`).
+
+Ejemplo de `.env.local` (valores ilustrativos):
+
+```dotenv
+AEGIS_BASE_URL=https://auth.tu-dominio.com
+AEGIS_TENANT_ID=cibercom
+AEGIS_APP_ID=empleados
+AEGIS_API_KEY=ak_test_REEMPLAZAR_POR_TU_KEY
+
+AEGIS_TIMEOUT=15
+AEGIS_LEGACY_LOGIN_FALLBACK=false
+AEGIS_DISABLED=false
+```
+
+> Nota: este backend (Flask) no carga `.env` automáticamente; necesitas cargarlo tú (PowerShell, tu runner, Docker, o una herramienta tipo `python-dotenv` si decides incorporarla).
+
 ---
 
 ## 11. Riesgos y dependencias
