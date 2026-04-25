@@ -52,6 +52,15 @@ except Exception as e:
 
 def create_super_admin():
     try:
+        from core.aegis_config import get_aegis_settings
+        # Con Aegis, la contraseña del admin no estaría en Mongo: el arranque no puede
+        # crear un usuario “solo Mongo” que luego no pueda iniciar sesión.
+        if get_aegis_settings()["login_enabled"]:
+            logger.info(
+                "Login Aegis activo: omitir creación automática de super_admin en Mongo; "
+                "aprovisionar en Aegis y enlazar con aegis_user_id + role SUPER_ADMIN."
+            )
+            return
         if not mongo.db.usuario.find_one({'role': 'SUPER_ADMIN'}):
             mongo.db.usuario.insert_one({
                 'user':        'admin',

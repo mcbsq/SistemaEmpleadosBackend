@@ -35,17 +35,20 @@ def setup_usuario_routes(app, mongo):
         return get_usuarios(mongo)
 
     # ── POST /usuario  → crear usuario ──────────────────────────────────────
+    # Con Aegis activo, el body debe incluir `email` (correo completo) además de user/password.
     @app.route('/usuario', methods=['POST'])
     def create_usuario_route():
-        user        = request.json.get('user')
-        password    = request.json.get('password')
-        empleado_id = request.json.get('empleado_id')
-        role        = request.json.get('role', 'EMPLOYEE')
+        body        = request.get_json() or {}
+        user        = body.get('user')
+        password    = body.get('password')
+        empleado_id = body.get('empleado_id')
+        role        = body.get('role', 'EMPLOYEE')
+        email       = body.get('email')
 
-        if usuario_existente(mongo, user):
+        if usuario_existente(mongo, user, email):
             return jsonify({'error': 'El usuario ya existe.'}), 400
 
-        return create_usuario(mongo, user, password, empleado_id, role)
+        return create_usuario(mongo, user, password, empleado_id, role, email=email)
 
     # ── GET /usuarios  → alias protegido (super admin) ──────────────────────
     @app.route('/usuarios', methods=['GET'])

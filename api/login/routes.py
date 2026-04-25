@@ -10,15 +10,14 @@ def setup_login_routes(app, mongo):
         try:
             data = request.get_json()
             logging.debug(f"Datos recibidos en /login: {data}")
-            
-            user = data.get('user')
+
+            # `identifier` es el nombre del campo en Aegis; `user` es el que ya mandaba el front.
+            identifier = (data.get('identifier') or data.get('user') or '').strip()
             password = data.get('password')
+
+            logging.debug("Intento de login (identifier cortado en logs por seguridad)")
             
-            # Log de intento de login
-            logging.debug(f"Intento de login recibido para usuario: {user}")
-            
-            # Llamar a la función de login
-            return login(mongo, user, password)
+            return login(mongo, identifier, password)
             
         except Exception as e:
             # Log del error
