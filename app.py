@@ -83,6 +83,8 @@ from api.rh.routes                    import setup_rh_routes
 from api.jerarquia.routes             import setup_jerarquia_routes
 from api.roles.routes                 import setup_roles_routes
 from api.monitor.routes               import setup_monitor_routes
+from api.catalogos.catalogos import setup_catalogos_routes
+
 # from api.org.routes                 import setup_org_routes
 
 setup_login_routes(app, mongo)
@@ -101,6 +103,7 @@ setup_rh_routes(app, mongo)
 setup_jerarquia_routes(app, mongo)
 setup_roles_routes(app, mongo)
 setup_monitor_routes(app, mongo)
+setup_catalogos_routes(app)
 # setup_org_routes(app, mongo)
 
 @app.errorhandler(404)

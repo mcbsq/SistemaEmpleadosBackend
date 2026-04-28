@@ -3,6 +3,7 @@ from flask import jsonify, request, Response
 from bson import json_util
 from bson.objectid import ObjectId
 from bson.errors import InvalidId
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,9 +20,11 @@ def _serialize(doc):
 # ── GET todos ─────────────────────────────────────────────────────────────────
 def get_rhs(mongo):
     try:
-        rh_list = list(mongo.db.rh.find())
-        empleados = {str(e['_id']): f"{e.get('Nombre','')} {e.get('ApelPaterno','')} {e.get('ApelMaterno','')}"
-                     for e in mongo.db.empleados.find()}
+        rh_list   = list(mongo.db.rh.find())
+        empleados = {
+            str(e['_id']): f"{e.get('Nombre','')} {e.get('ApelPaterno','')} {e.get('ApelMaterno','')}"
+            for e in mongo.db.empleados.find()
+        }
         for doc in rh_list:
             doc['NombreCompleto'] = empleados.get(str(doc.get('empleado_id', '')), '')
         return Response(json_util.dumps(rh_list), mimetype="application/json")
@@ -30,13 +33,19 @@ def get_rhs(mongo):
         return jsonify({'error': str(e)}), 500
 
 
-# ── GET por empleado ──────────────────────────────────────────────────────────
+# ── GET por empleado — usa Response+json.dumps para no truncar base64 ─────────
 def get_rh_by_empleado_id(mongo, empleado_id):
     try:
         doc = mongo.db.rh.find_one({'empleado_id': ObjectId(empleado_id)})
         if not doc:
-            return jsonify({}), 200   # vacío → el perfil usa fallback, no rompe
-        return jsonify(_serialize(doc)), 200
+            return jsonify({}), 200
+        serialized = _serialize(doc)
+        # Usar json.dumps en lugar de jsonify para evitar truncamiento
+        # de strings base64 largos (ExpedienteDigitalPDF puede ser varios MB)
+        return Response(
+            json.dumps(serialized, default=str),
+            mimetype="application/json"
+        )
     except (InvalidId, Exception) as e:
         return jsonify({'error': str(e)}), 500
 
@@ -46,40 +55,29 @@ def create_rh(mongo, empleado_id, rh_data):
     if not request.is_json:
         return jsonify({'error': 'No data provided'}), 400
     try:
-        data = request.get_json()
-        eid  = ObjectId(data.get('empleado_id', empleado_id))
-
+        data    = request.get_json()
+        eid     = ObjectId(data.get('empleado_id', empleado_id))
         payload = _build_payload(eid, data)
         result  = mongo.db.rh.insert_one(payload)
-
         return jsonify({'_id': str(result.inserted_id), 'message': 'RH creado'}), 201
     except Exception as e:
         logger.error(f"Error en create_rh: {e}")
         return jsonify({'error': str(e)}), 500
 
 
-# ── UPDATE — upsert real ──────────────────────────────────────────────────────
-# FIX PRINCIPAL:
-#   · El original hacía find_one primero y devolvía 404 si no existía.
-#     Eso hacía que el primer guardado desde el perfil siempre fallara.
-#   · Ahora usa update_one con upsert=True → crea el documento si no existe.
-#   · El PDF (ExpedienteDigitalPDF) puede llegar como array de use-file-picker
-#     [{content: "data:...", name: "..."}] — se normaliza antes de guardar.
+# ── UPDATE ────────────────────────────────────────────────────────────────────
 def update_rh(mongo, empleado_id, rh_data):
     try:
-        data = request.get_json(silent=True) or {}
-        eid  = ObjectId(empleado_id)
-
+        data    = request.get_json(silent=True) or {}
+        eid     = ObjectId(empleado_id)
         payload = _build_payload(eid, data)
 
         mongo.db.rh.update_one(
             {'empleado_id': eid},
             {'$set': payload},
-            upsert=True,         # ← crea si no existe, actualiza si existe
+            upsert=True,
         )
-
         return jsonify({'message': f'RH actualizado para empleado {empleado_id}'}), 200
-
     except (InvalidId, Exception) as e:
         logger.error(f"Error en update_rh: {e}")
         return jsonify({'error': str(e)}), 500
@@ -98,30 +96,35 @@ def delete_rh_by_empleado_id(mongo, empleado_id):
 
 # ── Helper interno ────────────────────────────────────────────────────────────
 def _build_payload(eid, data):
-    """Construye el documento a guardar normalizando el PDF."""
-
-    # El PDF puede llegar como:
-    #   · string base64/data-URL  (guardado desde MongoDB)
-    #   · array [{content: "data:...", name: "..."}]  (use-file-picker)
-    #   · None / ""
+    # Normalizar PDF — acepta array use-file-picker o string directo
     pdf_raw = data.get('ExpedienteDigitalPDF')
     if isinstance(pdf_raw, list) and len(pdf_raw) > 0:
         first = pdf_raw[0]
         pdf   = first.get('content') or first if isinstance(first, dict) else first
+    elif isinstance(pdf_raw, str) and len(pdf_raw) > 0:
+        pdf = pdf_raw  # ya viene como string (base64 o data URL), guardar tal cual
     else:
-        pdf = pdf_raw or None
+        pdf = None
+
+    tipo_contrato    = data.get('tipo_contrato', '')
+    contrato_firmado = data.get('contrato_firmado', False)
+    if tipo_contrato in ('digital', 'autografa'):
+        contrato_firmado = True
 
     return {
-        'empleado_id':        eid,
-        'Puesto':             data.get('Puesto',             ''),
-        'JefeInmediato':      data.get('JefeInmediato',      ''),
-        'JefeInmediato_id':   data.get('JefeInmediato_id',   ''),
-        'HorarioLaboral':     data.get('HorarioLaboral',     {
+        'empleado_id':          eid,
+        'Puesto':               data.get('Puesto',             ''),
+        'JefeInmediato':        data.get('JefeInmediato',      ''),
+        'JefeInmediato_id':     data.get('JefeInmediato_id',   ''),
+        'HorarioLaboral':       data.get('HorarioLaboral', {
             'HoraEntrada':    '',
             'HoraSalida':     '',
             'TiempoComida':   '',
             'DiasTrabajados': '',
         }),
-        'NombreCompleto':     data.get('NombreCompleto',     ''),
+        'NombreCompleto':       data.get('NombreCompleto',     ''),
         'ExpedienteDigitalPDF': pdf,
+        'contrato_firmado':     contrato_firmado,
+        'tipo_contrato':        tipo_contrato,
+        'Departamento':         data.get('Departamento',       ''),
     }
