@@ -33,7 +33,6 @@ def create_direccion(mongo):
             'CodigoP':     data.get('CodigoP'),
             'Pais':        data.get('Pais', 'México'),
             'empleado_id': data.get('empleado_id'),
-            # Coordenadas para el mapa — None si no vienen
             'lat':         data.get('lat', None),
             'lng':         data.get('lng', None),
         }).inserted_id
@@ -58,7 +57,13 @@ def get_direccions(mongo):
 
 def get_direccion(mongo, id):
     try:
-        doc = mongo.db.direccion.find_one({'_id': ObjectId(id)})
+        obj_id = ObjectId(id)
+    except (InvalidId, TypeError):
+        return jsonify({'error': 'ID inválido'}), 400
+    try:
+        doc = mongo.db.direccion.find_one({'_id': obj_id})
+        if not doc:
+            return jsonify({'message': 'Dirección no encontrada'}), 404
         return Response(json_util.dumps(doc), mimetype="application/json")
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -90,11 +95,12 @@ def get_direccion_by_empleado(mongo, empleado_id):
 def update_direccion(mongo, id):
     """PUT /direccion/<id> — actualiza por _id (ruta original)"""
     try:
+        obj_id = ObjectId(id)
+    except (InvalidId, TypeError):
+        return jsonify({'error': 'ID inválido'}), 400
+    try:
         data = request.json or {}
-        mongo.db.direccion.update_one(
-            {'_id': ObjectId(id)},
-            {'$set': data}
-        )
+        mongo.db.direccion.update_one({'_id': obj_id}, {'$set': data})
         return jsonify({'message': 'Actualizado con éxito'}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -139,7 +145,11 @@ def update_direccion_by_empleado(mongo, empleado_id):
 
 def delete_direccion(mongo, id):
     try:
-        mongo.db.direccion.delete_one({'_id': ObjectId(id)})
+        obj_id = ObjectId(id)
+    except (InvalidId, TypeError):
+        return jsonify({'error': 'ID inválido'}), 400
+    try:
+        mongo.db.direccion.delete_one({'_id': obj_id})
         return jsonify({'message': f'Direccion {id} eliminada'}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

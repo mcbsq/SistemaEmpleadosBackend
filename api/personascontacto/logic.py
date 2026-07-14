@@ -1,5 +1,5 @@
 # api/personascontacto/logic.py
-from flask import jsonify, request, Response
+from flask import jsonify, Response
 from bson import json_util
 from bson.objectid import ObjectId
 from bson.errors import InvalidId
@@ -9,8 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 def create_personascontacto(mongo, personalcontacto):
-    personalcontacto = request.json.get('personalcontacto', {})
-
     if not personalcontacto:
         return jsonify({'error': 'No data provided for personalcontacto'}), 400
 
@@ -39,7 +37,7 @@ def create_personascontacto(mongo, personalcontacto):
     })
 
     return jsonify({
-        '_id':               str(result.inserted_id),   # ← fix: era str(id)
+        '_id':               str(result.inserted_id),
         'empleadoid':        str(empleadoid),
         'parenstesco':       parenstesco,
         'nombreContacto':    nombreContacto,
@@ -88,24 +86,27 @@ def delete_personascontacto(mongo, empleadoid):
         return jsonify({'error': str(e)}), 500
 
 
+# FIX: antes esta función releía request.json y buscaba un 'empleadoid'
+# DENTRO del body (personalcontacto.empleadoid) para armar el filtro de
+# actualización, ignorando por completo el <empleadoid> real de la URL.
+# Si ambos no coincidían, se actualizaba (o se fallaba en actualizar) el
+# contacto equivocado. Ahora usa el empleadoid de la URL, que es lo que
+# la ruta /personascontacto/empleado/<empleadoid> promete.
 def update_personascontacto_by_empleado(mongo, empleadoid, personal_contacto):
-    personal_contacto = request.json.get('personalcontacto', {})
-
     if not personal_contacto:
         return jsonify({'error': 'No data provided'}), 400
 
     parenstesco       = personal_contacto.get('parenstesco', '')
-    nombre_contacto   = personal_contacto.get('nombreContacto', '')
-    telefono_contacto = personal_contacto.get('telefonoContacto', '')
-    correo_contacto   = personal_contacto.get('correoContacto', '')
+    nombre_contacto    = personal_contacto.get('nombreContacto', '')
+    telefono_contacto  = personal_contacto.get('telefonoContacto', '')
+    correo_contacto    = personal_contacto.get('correoContacto', '')
     direccion_contacto = personal_contacto.get('direccionContacto', '')
-    empleadoid_str    = personal_contacto.get('empleadoid', '')
 
     if not parenstesco or not nombre_contacto:
         return jsonify({'error': 'parenstesco and nombreContacto are required'}), 400
 
     try:
-        eid = ObjectId(empleadoid_str)
+        eid = ObjectId(empleadoid)
     except Exception:
         return jsonify({'error': 'Invalid ObjectId'}), 400
 

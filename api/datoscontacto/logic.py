@@ -1,5 +1,5 @@
 # api/datoscontacto/logic.py
-from flask import jsonify, request, Response
+from flask import jsonify, Response
 from bson import json_util
 from bson.objectid import ObjectId
 from bson.errors import InvalidId
@@ -10,12 +10,6 @@ logger = logging.getLogger(__name__)
 
 def create_datoscontacto(mongo, TelFijo, TelCelular, IdWhatsApp, IdTelegram, ListaCorreos, empleado_id):
     try:
-        TelFijo      = request.json.get('TelFijo', None)
-        TelCelular   = request.json.get('TelCelular', None)
-        IdWhatsApp   = request.json.get('IdWhatsApp', None)
-        IdTelegram   = request.json.get('IdTelegram', None)
-        ListaCorreos = request.json.get('ListaCorreos', None)
-
         result = mongo.db.datoscontacto.insert_one({
             'EmpleadoId':   ObjectId(empleado_id),
             'TelFijo':      TelFijo,
@@ -26,7 +20,7 @@ def create_datoscontacto(mongo, TelFijo, TelCelular, IdWhatsApp, IdTelegram, Lis
         })
 
         return jsonify({
-            '_id':          str(result.inserted_id),   # ← fix: era str(id)
+            '_id':          str(result.inserted_id),
             'EmpleadoId':   empleado_id,
             'TelFijo':      TelFijo,
             'TelCelular':   TelCelular,
@@ -78,12 +72,6 @@ def delete_datoscontacto(mongo, id):
 
 def update_datoscontacto(mongo, empleado_id, TelFijo, TelCelular, IdWhatsApp, IdTelegram, ListaCorreos):
     try:
-        TelFijo      = request.json.get('TelFijo', None)
-        TelCelular   = request.json.get('TelCelular', None)
-        IdWhatsApp   = request.json.get('IdWhatsApp', None)
-        IdTelegram   = request.json.get('IdTelegram', None)
-        ListaCorreos = request.json.get('ListaCorreos', None)
-
         mongo.db.datoscontacto.update_one(
             {'EmpleadoId': ObjectId(empleado_id)},
             {'$set': {
@@ -98,10 +86,7 @@ def update_datoscontacto(mongo, empleado_id, TelFijo, TelCelular, IdWhatsApp, Id
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
-def guardar_coordenadas_en_db(mongo, latitude, longitude):
-    try:
-        result = mongo.db.coordenadas.insert_one({'latitude': latitude, 'longitude': longitude})
-        return {'_id': str(result.inserted_id), 'latitude': latitude, 'longitude': longitude}
-    except Exception as e:
-        raise Exception(f"Error al guardar coordenadas: {str(e)}")
+# guardar_coordenadas_en_db se eliminó — confirmado en desuso (código
+# huérfano de un enfoque anterior; MapaDomicilio.jsx guarda lat/lng
+# directo en el documento de `direccion`). Si en algún momento revives esta
+# idea, hazlo ligado a empleado_id desde el inicio.

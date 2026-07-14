@@ -1,73 +1,65 @@
-# api/usuario/routes.py
-# Fix: GET /usuario devolvía 405 porque no estaba registrado.
-# Ahora se separa el endpoint para lista completa (GET /usuario → todos)
-# y se mantiene compatibilidad con el frontend que llama GET /usuario.
-
 from flask import request, jsonify
 from .logic import (create_usuario, get_usuarios, get_usuario,
                     delete_usuario, update_usuario, usuario_existente)
 import logging
-from functools import wraps
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from api.auth_decorators import require_roles
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def require_super_admin(f):
-    @wraps(f)
-    @jwt_required()
-    def decorated(*args, **kwargs):
-        user = get_jwt_identity()
-        if isinstance(user, dict) and user.get('role') == 'SUPER_ADMIN':
-            return f(*args, **kwargs)
-        return jsonify({"error": "Acceso no autorizado"}), 403
-    return decorated
-
-
 def setup_usuario_routes(app, mongo):
 
-    # ── GET /usuario  → devuelve todos los usuarios ─────────────────────────
-    # El frontend hace GET /usuario (sin ID) para el RoleManager.
-    # La ruta /usuarios (con 's') sigue existiendo como alias protegido.
     @app.route('/usuario', methods=['GET'])
+    @require_roles('SUPER_ADMIN')
     def get_usuario_list_route():
         return get_usuarios(mongo)
 
-    # ── POST /usuario  → crear usuario ──────────────────────────────────────
+    # CRÍTICO — antes sin protección alguna: cualquiera podía crear una
+    # cuenta con "role": "SUPER_ADMIN" sin token. Ahora SUPER_ADMIN
+    # únicamente. Aquí también se asignan las áreas de un ADMIN.
     @app.route('/usuario', methods=['POST'])
+    @require_roles('SUPER_ADMIN')
     def create_usuario_route():
-        user        = request.json.get('user')
-        password    = request.json.get('password')
-        empleado_id = request.json.get('empleado_id')
-        role        = request.json.get('role', 'EMPLOYEE')
+        body                 = request.get_json() or {}
+        user                 = body.get('user')
+        password             = body.get('password')
+        empleado_id          = body.get('empleado_id')
+        role                 = body.get('role', 'EMPLOYEE')
+        email                = body.get('email')
+        areas_administradas  = body.get('areas_administradas')  # lista de depto_id, solo aplica si role == 'ADMIN'
 
-        if usuario_existente(mongo, user):
+        if usuario_existente(mongo, user, email):
             return jsonify({'error': 'El usuario ya existe.'}), 400
 
-        return create_usuario(mongo, user, password, empleado_id, role)
+        return create_usuario(mongo, user, password, empleado_id, role,
+                               email=email, areas_administradas=areas_administradas)
 
-    # ── GET /usuarios  → alias protegido (super admin) ──────────────────────
     @app.route('/usuarios', methods=['GET'])
-    @require_super_admin
+    @require_roles('SUPER_ADMIN')
     def get_usuarios_route():
         return get_usuarios(mongo)
 
-    # ── GET /usuario/<id> ────────────────────────────────────────────────────
     @app.route('/usuario/<id>', methods=['GET'])
+    @require_roles('ADMIN', 'SUPER_ADMIN')
     def get_usuario_route(id):
         return get_usuario(mongo, id)
 
-    # ── PUT /usuario/<id> ────────────────────────────────────────────────────
+    # SUPER_ADMIN únicamente: puede cambiar "role" y "areas_administradas"
+    # de cualquier usuario. Abrir esto a ADMIN permitiría auto-ascenderse a
+    # SUPER_ADMIN o auto-asignarse áreas que no le corresponden.
     @app.route('/usuario/<id>', methods=['PUT'])
+    @require_roles('SUPER_ADMIN')
     def update_usuario_route(id):
-        data = request.get_json() or {}
-        user     = data.get('user')
-        password = data.get('password')
-        role     = data.get('role')
-        return update_usuario(mongo, id, user, password, role)
+        data                 = request.get_json() or {}
+        user                 = data.get('user')
+        password             = data.get('password')
+        role                 = data.get('role')
+        areas_administradas  = data.get('areas_administradas')
+        return update_usuario(mongo, id, user, password, role,
+                               areas_administradas=areas_administradas)
 
-    # ── DELETE /usuario/<id> ─────────────────────────────────────────────────
     @app.route('/usuario/<id>', methods=['DELETE'])
+    @require_roles('SUPER_ADMIN')
     def delete_usuario_route(id):
         return delete_usuario(mongo, id)

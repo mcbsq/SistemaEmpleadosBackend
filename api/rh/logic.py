@@ -111,6 +111,17 @@ def _build_payload(eid, data):
     if tipo_contrato in ('digital', 'autografa'):
         contrato_firmado = True
 
+    # Campos personalizados: diccionario libre nombre→valor definido por el
+    # admin desde el perfil ("toda la información que guste"). Se sanitiza a
+    # strings con límites para que un cliente malicioso no infle el documento.
+    campos_raw = data.get('CamposPersonalizados') or {}
+    campos = {}
+    if isinstance(campos_raw, dict):
+        for k, v in list(campos_raw.items())[:40]:
+            k = str(k).strip()[:60]
+            if k:
+                campos[k] = str(v).strip()[:500]
+
     return {
         'empleado_id':          eid,
         'Puesto':               data.get('Puesto',             ''),
@@ -127,4 +138,13 @@ def _build_payload(eid, data):
         'contrato_firmado':     contrato_firmado,
         'tipo_contrato':        tipo_contrato,
         'Departamento':         data.get('Departamento',       ''),
+        # ── Información laboral estándar (paridad con HRIS del mercado) ──
+        'FechaIngreso':         data.get('FechaIngreso',       ''),
+        'NumeroEmpleado':       data.get('NumeroEmpleado',     ''),
+        'CURP':                 data.get('CURP',               ''),
+        'RFC':                  data.get('RFC',                ''),
+        'EstadoCivil':          data.get('EstadoCivil',        ''),
+        'Nacionalidad':         data.get('Nacionalidad',       ''),
+        'Salario':              data.get('Salario',            ''),
+        'CamposPersonalizados': campos,
     }

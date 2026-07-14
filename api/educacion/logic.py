@@ -1,5 +1,5 @@
 # api/educacion/logic.py
-from flask import jsonify, request, Response
+from flask import jsonify, Response
 from bson import json_util
 from bson.objectid import ObjectId
 from bson.errors import InvalidId
@@ -20,14 +20,11 @@ def _serialize_educacion(doc):
 
 
 def create_educacion(mongo, empleado_id, data):
-    data = request.json
-    empleado_id = data.get('empleado_id')
-
     if not empleado_id:
         return jsonify({'message': 'Falta el ID del empleado'}), 400
 
     try:
-        educacion  = [{'Fecha': e.get('Fecha'), 'Titulo': e.get('Titulo'), 'Descripcion': e.get('Descripcion')} for e in data.get('Educacion', [])]
+        educacion   = [{'Fecha': e.get('Fecha'), 'Titulo': e.get('Titulo'), 'Descripcion': e.get('Descripcion')} for e in data.get('Educacion', [])]
         experiencia = [{'Fecha': e.get('Fecha'), 'Titulo': e.get('Titulo'), 'Descripcion': e.get('Descripcion')} for e in data.get('Experiencia', [])]
 
         result = mongo.db.educacion.insert_one({
@@ -81,23 +78,24 @@ def delete_educacion(mongo, empleado_id):
 
 
 def update_educacion(mongo, empleado_id, data):
-    data = request.get_json()
     if not data:
         return jsonify({'error': 'JSON inválido'}), 400
     try:
-        # empleado_id puede llegar como string o como {"$oid": "..."}
-        eid = empleado_id['$oid'] if isinstance(empleado_id, dict) and '$oid' in empleado_id else empleado_id
-        result = mongo.db.educacion.update_one(
-            {'empleado_id': ObjectId(eid)},
-            {'$set': {
-                'Descripcion': data.get('Descripcion'),
-                'Educacion':   data.get('Educacion'),
-                'Experiencia': data.get('Experiencia'),
-                'Habilidades': data.get('Habilidades'),
-            }}
-        )
+        eid = ObjectId(empleado_id)
+
+        # FIX: antes se hacía $set de los 4 campos SIEMPRE, aunque no
+        # vinieran en el body — un PUT parcial (solo Descripcion, por
+        # ejemplo) borraba Educacion/Experiencia/Habilidades a None.
+        # Ahora solo se actualiza lo que realmente vino en el body.
+        campos_permitidos = ('Descripcion', 'Educacion', 'Experiencia', 'Habilidades')
+        set_data = {campo: data[campo] for campo in campos_permitidos if campo in data}
+
+        if not set_data:
+            return jsonify({'error': 'Nada que actualizar'}), 400
+
+        result = mongo.db.educacion.update_one({'empleado_id': eid}, {'$set': set_data})
         if result.matched_count > 0:
             return jsonify({'message': 'Educación actualizada'}), 200
         return jsonify({'message': 'No encontrado'}), 404
-    except Exception as e:
+    except (InvalidId, Exception) as e:
         return jsonify({'error': str(e)}), 500

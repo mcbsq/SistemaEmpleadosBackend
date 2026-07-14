@@ -1,59 +1,54 @@
-from flask import jsonify, request, Response
+from flask import jsonify, Response
 from bson import json_util
 from bson.objectid import ObjectId
+from bson.errors import InvalidId
 
-# POST
+
 def create_catalogodepto(mongo, NombreDepto, Descripcion, Poblacion):
-    NombreDepto = request.json.get('NombreDepto')
-    Descripcion = request.json.get('Descripcion')
-    Poblacion = request.json.get('Poblacion')
+    id_insertado = mongo.db.catalogodepto.insert_one(
+        {'NombreDepto': NombreDepto, 'Descripcion': Descripcion, 'Poblacion': Poblacion}
+    ).inserted_id
 
-    if NombreDepto and Descripcion:
-        id_insertado = mongo.db.catalogodepto.insert_one(
-            {'NombreDepto': NombreDepto, 'Descripcion': Descripcion, 'Poblacion': Poblacion}
-        ).inserted_id
-        
-        response = jsonify({
-            '_id': str(id_insertado),
-            'NombreDepto': NombreDepto,
-            'Descripcion': Descripcion,
-            'Poblacion': Poblacion,
-        })
-        response.status_code = 201
-        return response
-    else:
-        return not_found()
+    return jsonify({
+        '_id': str(id_insertado),
+        'NombreDepto': NombreDepto,
+        'Descripcion': Descripcion,
+        'Poblacion': Poblacion,
+    }), 201
 
-# GET
+
 def get_catalogodeptos(mongo):
     catalogodeptos = mongo.db.catalogodepto.find()
-    response = json_util.dumps(catalogodeptos)
-    return Response(response, mimetype="application/json")
+    return Response(json_util.dumps(catalogodeptos), mimetype="application/json")
 
-# GET ID
+
 def get_catalogodepto(mongo, id):
-    catalogodepto = mongo.db.catalogodepto.find_one({'_id': ObjectId(id)})
-    response = json_util.dumps(catalogodepto)
-    return Response(response, mimetype="application/json")
+    try:
+        obj_id = ObjectId(id)
+    except (InvalidId, TypeError):
+        return jsonify({'error': 'ID inválido'}), 400
+    catalogodepto = mongo.db.catalogodepto.find_one({'_id': obj_id})
+    if not catalogodepto:
+        return jsonify({'message': 'Departamento no encontrado'}), 404
+    return Response(json_util.dumps(catalogodepto), mimetype="application/json")
 
-# DELETE
+
 def delete_catalogodepto(mongo, id):
-    mongo.db.catalogodepto.delete_one({'_id': ObjectId(id)})
-    return jsonify({'message': f'Departamento {id} eliminado'})
+    try:
+        obj_id = ObjectId(id)
+    except (InvalidId, TypeError):
+        return jsonify({'error': 'ID inválido'}), 400
+    mongo.db.catalogodepto.delete_one({'_id': obj_id})
+    return jsonify({'message': f'Departamento {id} eliminado'}), 200
 
-# PUT
+
 def update_catalogodepto(mongo, id, NombreDepto, Descripcion, Poblacion):
-    NombreDepto = request.json.get('NombreDepto')
-    Descripcion = request.json.get('Descripcion')
-    Poblacion = request.json.get('Poblacion')
-    
-    if NombreDepto:
-        mongo.db.catalogodepto.update_one(
-            {'_id': ObjectId(id)}, 
-            {'$set': {'NombreDepto': NombreDepto, 'Descripcion': Descripcion, 'Poblacion': Poblacion}}
-        )
-        return jsonify({'message': 'Actualizado exitosamente'})
-    return not_found()
-
-def not_found(error=None):
-    return jsonify({'message': 'Resource Not Found', 'status': 404}), 404
+    try:
+        obj_id = ObjectId(id)
+    except (InvalidId, TypeError):
+        return jsonify({'error': 'ID inválido'}), 400
+    mongo.db.catalogodepto.update_one(
+        {'_id': obj_id},
+        {'$set': {'NombreDepto': NombreDepto, 'Descripcion': Descripcion, 'Poblacion': Poblacion}}
+    )
+    return jsonify({'message': 'Actualizado exitosamente'}), 200

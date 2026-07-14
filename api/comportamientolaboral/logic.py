@@ -1,89 +1,95 @@
-from flask import jsonify, request, Response
+# api/comportamientolaboral/logic.py
+from flask import jsonify, Response
 from bson import json_util
 from bson.objectid import ObjectId
+from bson.errors import InvalidId
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def json_handler(obj):
-    """Manejador para la serialización JSON que maneja ObjectId."""
-    if isinstance(obj, ObjectId):
-        return str(obj)
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+def _to_object_id(id_str):
+    try:
+        return ObjectId(id_str)
+    except (InvalidId, TypeError):
+        return None
 
-######################################################
 
-#COMPORTAMIENTO LABORAL
+def create_comportamientolaboral(mongo, Fecha, Descripcion, Calificacion, empleado_id=None):
+    try:
+        doc = {'Fecha': Fecha, 'Descripcion': Descripcion, 'Calificacion': Calificacion}
+        if empleado_id:
+            eid = _to_object_id(empleado_id)
+            if eid is None:
+                return jsonify({'error': 'empleado_id inválido'}), 400
+            doc['empleado_id'] = eid
 
-# POST
-def create_comportamientolaboral(mongo, Fecha, Descripcion, Calificacion):
-    # Recibe los datos del cuerpo de la solicitud HTTP
-    Fecha = request.json['Fecha']
-    Descripcion = request.json['Descripcion']
-    Calificacion = request.json['Calificacion']
+        # FIX: antes se guardaba str(insert_one_result) en vez de
+        # str(insert_one_result.inserted_id).
+        result = mongo.db.comportamientolaboral.insert_one(doc)
+        doc['_id'] = str(result.inserted_id)
+        if empleado_id:
+            doc['empleado_id'] = empleado_id
+        return jsonify(doc), 201
+    except Exception as e:
+        logger.error(f"Error en create_comportamientolaboral: {e}")
+        return jsonify({'error': str(e)}), 500
 
-    if Fecha and Descripcion and Calificacion:
-        # Inserta un nuevo comportamiento laboral en la base de datos
-        id = mongo.db.comportamientolaboral.insert_one(
-            {'Fecha': Fecha, 'Descripcion': Descripcion, 'Calificacion': Calificacion})
-        # Crea una respuesta JSON con los datos del comportamiento laboral creado
-        response = jsonify({
-            '_id': str(id),
-            'Fecha': Fecha,
-            'Descripcion': Descripcion,
-            'Calificacion': Calificacion
-        })
-        response.status_code = 201 # Establecer el código de estado HTTP 201 (Created)
-        return response
-    else:
-        return not_found() # Llamar a la función not_found() en caso de error
 
-# GET
 def get_comportamientolaborals(mongo):
-    # Obtiene todos los comportamientos laborales de la base de datos
-    comportamientolaborals = mongo.db.comportamientolaboral.find()
-    # Convierte los documentos a formato JSON
-    response = json_util.dumps(comportamientolaborals)
-    return Response(response, mimetype="application/json") # Enviar la respuesta JSON
+    try:
+        docs = mongo.db.comportamientolaboral.find()
+        return Response(json_util.dumps(docs), mimetype="application/json")
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-# GET ID
+
+def get_comportamientolaborals_by_empleado(mongo, empleado_id):
+    eid = _to_object_id(empleado_id)
+    if eid is None:
+        return jsonify({'error': 'empleado_id inválido'}), 400
+    try:
+        docs = mongo.db.comportamientolaboral.find({'empleado_id': eid})
+        return Response(json_util.dumps(docs), mimetype="application/json")
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 def get_comportamientolaboral(mongo, id):
-    # Busca un comportamiento laboral específico por su ID en la base de datos
-    print(id)
-    comportamientolaboral = mongo.db.comportamientolaboral.find_one({'_id': ObjectId(id), })
-    response = json_util.dumps(comportamientolaboral)
-    return Response(response, mimetype="application/json")
+    eid = _to_object_id(id)
+    if eid is None:
+        return jsonify({'error': 'ID inválido'}), 400
+    try:
+        doc = mongo.db.comportamientolaboral.find_one({'_id': eid})
+        if not doc:
+            return jsonify({'message': 'Registro no encontrado'}), 404
+        return Response(json_util.dumps(doc), mimetype="application/json")
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-# DELETE
+
 def delete_comportamientolaboral(mongo, id):
-    # Elimina un comportamiento laboral por su ID de la base de datos
-    mongo.db.comportamientolaboral.delete_one({'_id': ObjectId(id)})
-    # Crea una respuesta JSON indicando que el comportamiento laboral ha sido eliminado
-    response = jsonify({'message': 'comportamientolaboral' + id + ' Deleted Successfully'})
-    response.status_code = 200 # Establecer el código de estado HTTP 200 (OK)
-    return response
+    eid = _to_object_id(id)
+    if eid is None:
+        return jsonify({'error': 'ID inválido'}), 400
+    try:
+        result = mongo.db.comportamientolaboral.delete_one({'_id': eid})
+        if result.deleted_count > 0:
+            return jsonify({'message': f'Comportamiento laboral {id} eliminado exitosamente'}), 200
+        return jsonify({'message': 'No se encontró el registro para eliminar'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 def update_comportamientolaboral(mongo, _id, Fecha, Descripcion, Calificacion):
-    # Recibe los nuevos datos del cuerpo de la solicitud HTTP
-    Fecha = request.json['Fecha']
-    Descripcion = request.json['Descripcion']
-    Calificacion = request.json['Calificacion']
-    if Fecha and Descripcion and Calificacion:
-        # Actualiza un comportamiento laboral por su ID en la base de datos
+    eid = _to_object_id(_id)
+    if eid is None:
+        return jsonify({'error': 'ID inválido'}), 400
+    try:
         mongo.db.comportamientolaboral.update_one(
-            {'_id': ObjectId(_id['$oid']) if '$oid' in _id else ObjectId(_id)}, {'$set': {'Fecha': Fecha, 'Descripcion': Descripcion, 'Calificacion': Calificacion}})
-        # Crea una respuesta JSON indicando que el comportamiento laboral ha sido actualizado
-        response = jsonify({'message': 'comportamientolaboral' + _id + 'Updated Successfuly'})
-        response.status_code = 200
-        return response
-    else:
-      return not_found() # Llama a la función not_found() en caso de error
-    
-########################################################
-def not_found(error=None):
-    message = {
-        'message': 'Resource Not Found: ' + request.url,
-        'status': 404
-    }
-    response = jsonify(message)
-    response.status_code = 404
-    return response
+            {'_id': eid},
+            {'$set': {'Fecha': Fecha, 'Descripcion': Descripcion, 'Calificacion': Calificacion}}
+        )
+        return jsonify({'message': f'Comportamiento laboral {_id} actualizado exitosamente'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

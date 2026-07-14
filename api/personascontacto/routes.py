@@ -1,38 +1,32 @@
 from flask import request
 from .logic import (create_personascontacto, get_personascontactos, get_personascontacto_by_empleado, delete_personascontacto, update_personascontacto_by_empleado)
+from api.auth_decorators import require_roles, require_self_or_roles
 
-# Esta función establece las rutas para las operaciones CRUD de personas de contacto.
+
 def setup_personascontacto_routes(app, mongo):
-    # Ruta para crear una nueva persona de contacto.
     @app.route('/personascontacto', methods=['POST'])
+    @require_roles('EMPLOYEE', 'ADMIN', 'SUPER_ADMIN')
     def create_personascontacto_route():
-        # Obtiene la información de la persona de contacto desde el cuerpo de la solicitud.
         personalcontacto = request.json.get('personalcontacto', {})
-        # Llama a la función lógica para crear una nueva persona de contacto.
         return create_personascontacto(mongo, personalcontacto)
 
-    # Ruta para obtener todas las personas de contacto.
     @app.route('/personascontacto', methods=['GET'])
+    @require_roles('ADMIN', 'SUPER_ADMIN')
     def get_personascontactos_route():
-        # Llama a la función lógica para obtener todas las personas de contacto.
         return get_personascontactos(mongo)
 
-    # Ruta para obtener personas de contacto por ID de empleado.
     @app.route('/personascontacto/empleado/<empleadoid>', methods=['GET'])
+    @require_self_or_roles('empleadoid', 'ADMIN', 'SUPER_ADMIN')
     def get_personascontacto_by_empleado_route(empleadoid):
-        # Llama a la función lógica para obtener personas de contacto específicas de un empleado.
         return get_personascontacto_by_empleado(mongo, empleadoid)
 
-    # Ruta para eliminar una persona de contacto por ID de empleado.
     @app.route('/personascontacto/<empleadoid>', methods=['DELETE'])
+    @require_self_or_roles('empleadoid', 'ADMIN', 'SUPER_ADMIN')
     def delete_personascontacto_route(empleadoid):
-        # Llama a la función lógica para eliminar la persona de contacto de un empleado.
         return delete_personascontacto(mongo, empleadoid)
 
-    # Ruta para actualizar la información de la persona de contacto de un empleado.
     @app.route('/personascontacto/empleado/<empleadoid>', methods=['PUT'])
+    @require_self_or_roles('empleadoid', 'ADMIN', 'SUPER_ADMIN')
     def update_personascontacto_by_empleado_route(empleadoid):
-        # Obtiene la información actualizada de la persona de contacto desde el cuerpo de la solicitud.
         personal_contacto = request.json.get('personalcontacto', {})
-        # Llama a la función lógica para actualizar la persona de contacto de un empleado.
         return update_personascontacto_by_empleado(mongo, empleadoid, personal_contacto)

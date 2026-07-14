@@ -1,9 +1,20 @@
+import os
+import sys
+import secrets
+import logging
+
+try:
+    # Carga opcional de .env.local para desarrollo local. En producción,
+    # define las variables directamente en el entorno del proceso/host y
+    # esto simplemente no hace nada si el paquete no está instalado.
+    from dotenv import load_dotenv
+    load_dotenv(".env.local")
+except ImportError:
+    pass
+
 from flask import Flask, jsonify, request
 from pymongo import MongoClient
-from bson.objectid import ObjectId
-from flask_cors import CORS, cross_origin
-import logging
-import sys
+from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from werkzeug.security import generate_password_hash
 
@@ -12,34 +23,57 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# CORS — opciones explícitas para cubrir preflight (OPTIONS) en todas las rutas
+# CORS — TODO (Fase D, ver docs/AEGIS...): restringir "origins" al dominio real
+# del frontend antes de producción. "*" combinado con rutas sin @jwt_required()
+# es la brecha más grande que tiene el proyecto hoy.
+CORS_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "*")
 CORS(app,
-     resources={r"/*": {"origins": "*"}},
+     resources={r"/*": {"origins": CORS_ORIGINS}},
      methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization"],
      supports_credentials=False)
 
-# Responder OPTIONS globalmente antes de que llegue a las rutas protegidas
+
 @app.before_request
 def handle_preflight():
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
-        response.headers["Access-Control-Allow-Origin"]  = "*"
+        response.headers["Access-Control-Allow-Origin"] = CORS_ORIGINS
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         return response
 
-app.config['JWT_SECRET_KEY'] = 'cibercom'
-app.config['UPLOAD_FOLDER']  = r'C:\Users\luis1\Desktop\python-mongodb-restapi\src\api\expedienteclinico_pdf'
+
+# ─── Configuración obligatoria por variable de entorno ─────────────────────
+# Sin default: si falta, el arranque falla explícito en vez de usar un
+# secreto débil o una credencial real hardcodeada en el repo.
+try:
+    app.config['JWT_SECRET_KEY'] = os.environ['JWT_SECRET_KEY']
+except KeyError:
+    logger.error("Falta JWT_SECRET_KEY en el entorno. Genera uno con "
+                 "secrets.token_urlsafe(64) y defínelo antes de arrancar.")
+    sys.exit(1)
+
+app.config['UPLOAD_FOLDER'] = os.environ.get(
+    'UPLOAD_FOLDER',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api', 'expedienteclinico_pdf'),
+)
 
 jwt = JWTManager(app)
 
-MONGO_URI = 'mongodb+srv://cibercom:proyectos2022@cluster0.ilngp.mongodb.net/controlempleados?retryWrites=true&w=majority'
+try:
+    MONGO_URI = os.environ['MONGO_URI']
+except KeyError:
+    logger.error("Falta MONGO_URI en el entorno. No hay valor por defecto por seguridad "
+                 "(el anterior tenía la contraseña real de Atlas hardcodeada).")
+    sys.exit(1)
+
 
 class MongoWrapper:
     def __init__(self, uri, db_name):
         self.client = MongoClient(uri, serverSelectionTimeoutMS=8000)
-        self.db     = self.client[db_name]
+        self.db = self.client[db_name]
+
 
 try:
     logger.debug("Conectando a MongoDB Atlas...")
@@ -50,23 +84,52 @@ except Exception as e:
     logger.error(f"ERROR CRÍTICO: No se pudo conectar a MongoDB: {str(e)}")
     sys.exit(1)
 
+
 def create_super_admin():
+    """
+    Crea un SUPER_ADMIN solo si no existe ninguno y no se está usando Aegis
+    para login. La contraseña NUNCA es un valor fijo en código: viene de
+    SUPER_ADMIN_INITIAL_PASSWORD o se genera al vuelo y se imprime UNA sola
+    vez para que el operador la cambie de inmediato.
+    """
     try:
-        if not mongo.db.usuario.find_one({'role': 'SUPER_ADMIN'}):
-            mongo.db.usuario.insert_one({
-                'user':        'admin',
-                'password':    generate_password_hash('admin123'),
-                'role':        'SUPER_ADMIN',
-                'empleado_id': None,
-                'org_id':      'default',
-            })
-            logger.info("Super Admin creado.")
+        from core.aegis_config import get_aegis_settings
+        if get_aegis_settings()["login_enabled"]:
+            logger.info(
+                "Login Aegis activo: omitir creación automática de super_admin en Mongo; "
+                "aprovisionar en Aegis y enlazar con aegis_user_id + role SUPER_ADMIN."
+            )
+            return
+
+        if mongo.db.usuario.find_one({'role': 'SUPER_ADMIN'}):
+            return
+
+        env_password = os.environ.get('SUPER_ADMIN_INITIAL_PASSWORD')
+        initial_password = env_password or secrets.token_urlsafe(12)
+
+        mongo.db.usuario.insert_one({
+            'user': 'admin',
+            'password': generate_password_hash(initial_password),
+            'role': 'SUPER_ADMIN',
+            'empleado_id': None,
+            'org_id': 'default',
+        })
+
+        if env_password:
+            logger.info("Super Admin creado con la contraseña de SUPER_ADMIN_INITIAL_PASSWORD.")
+        else:
+            logger.warning(
+                "Super Admin creado con contraseña generada automáticamente: %s "
+                "— cámbiala de inmediato. Este mensaje solo aparece una vez.",
+                initial_password,
+            )
     except Exception as e:
         logger.error(f"Error al verificar Super Admin: {str(e)}")
 
+
 create_super_admin()
 
-# ─── Rutas ────────────────────────────────────────────────────────────────────
+# ─── Rutas ───────────────────────────────────────────────────────────────────
 from api.login.routes                 import setup_login_routes
 from api.usuario.routes               import setup_usuario_routes
 from api.empleados.routes             import setup_empleados_routes
@@ -83,8 +146,6 @@ from api.rh.routes                    import setup_rh_routes
 from api.jerarquia.routes             import setup_jerarquia_routes
 from api.roles.routes                 import setup_roles_routes
 from api.monitor.routes               import setup_monitor_routes
-from api.catalogos.catalogos import setup_catalogos_routes
-
 # from api.org.routes                 import setup_org_routes
 
 setup_login_routes(app, mongo)
@@ -103,17 +164,20 @@ setup_rh_routes(app, mongo)
 setup_jerarquia_routes(app, mongo)
 setup_roles_routes(app, mongo)
 setup_monitor_routes(app, mongo)
-setup_catalogos_routes(app)
 # setup_org_routes(app, mongo)
+
 
 @app.errorhandler(404)
 def not_found(error=None):
     return jsonify({'message': 'Ruta no encontrada: ' + request.url, 'status': 404}), 404
 
+
 @app.errorhandler(500)
 def server_error(error=None):
     return jsonify({'message': 'Error interno del servidor', 'status': 500}), 500
 
+
 if __name__ == "__main__":
-    logger.info("Servidor Flask en puerto 5001.")
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    logger.info("Servidor Flask en puerto 5001 (debug=%s).", debug_mode)
+    app.run(debug=debug_mode, host='0.0.0.0', port=5001)
