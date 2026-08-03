@@ -146,7 +146,18 @@ from api.rh.routes                    import setup_rh_routes
 from api.jerarquia.routes             import setup_jerarquia_routes
 from api.roles.routes                 import setup_roles_routes
 from api.monitor.routes               import setup_monitor_routes
-# from api.org.routes                 import setup_org_routes
+from api.documentosfinancieros.routes import setup_documentosfinancieros_routes
+from api.org.routes                   import setup_org_routes
+from api.vacaciones.routes             import setup_vacaciones_routes
+from api.apikeys.routes                import setup_apikeys_routes
+from api.v1externo.routes              import setup_v1_externo_routes
+from api.notificaciones.routes         import setup_notificaciones_routes
+from api.auditoria.routes              import setup_auditoria_routes
+from api.nomina.routes                 import setup_nomina_routes
+from api.reclutamiento.routes          import setup_reclutamiento_routes
+from api.desempeno.routes              import setup_desempeno_routes
+from api.analitica.routes              import setup_analitica_routes
+from api.catalogos.catalogos          import setup_catalogos_routes
 
 setup_login_routes(app, mongo)
 setup_usuario_routes(app, mongo)
@@ -164,7 +175,18 @@ setup_rh_routes(app, mongo)
 setup_jerarquia_routes(app, mongo)
 setup_roles_routes(app, mongo)
 setup_monitor_routes(app, mongo)
-# setup_org_routes(app, mongo)
+setup_documentosfinancieros_routes(app, mongo)
+setup_org_routes(app, mongo)
+setup_vacaciones_routes(app, mongo)
+setup_apikeys_routes(app, mongo)
+setup_v1_externo_routes(app, mongo)
+setup_notificaciones_routes(app, mongo)
+setup_auditoria_routes(app, mongo)
+setup_nomina_routes(app, mongo)
+setup_reclutamiento_routes(app, mongo)
+setup_desempeno_routes(app, mongo)
+setup_analitica_routes(app, mongo)
+setup_catalogos_routes(app)
 
 
 @app.errorhandler(404)

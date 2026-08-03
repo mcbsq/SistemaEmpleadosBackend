@@ -15,3 +15,5 @@ requests==2.32.3
 setuptools==69.2.0
 Werkzeug==2.3.7
 wheel==0.44.0
+openpyxl==3.1.5
+et-xmlfile==2.0.0

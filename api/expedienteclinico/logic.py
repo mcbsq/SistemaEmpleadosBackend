@@ -13,6 +13,10 @@ def _serialize(doc):
     if doc is None:
         return None
     doc['_id'] = str(doc['_id'])
+    # Datos legacy: algunos documentos guardaron empleado_id como ObjectId en
+    # vez de string (inconsistencia de escritura anterior a este código).
+    if not isinstance(doc.get('empleado_id'), str):
+        doc['empleado_id'] = str(doc['empleado_id'])
     return doc
 
 
@@ -43,6 +47,21 @@ def create_or_update_expediente(mongo, empleado_id, data):
         }), 200
     except Exception as e:
         logging.error(f"Error guardando expediente: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+def get_all_expedientes(mongo):
+    """
+    Listado completo para el dashboard de MEDICO (distribución de tipo de
+    sangre, cobertura de NSS/seguro, alertas de quién no tiene expediente).
+    Excluye el PDF (pesado, no se usa en agregados) — para verlo, el propio
+    endpoint por empleado_id sigue siendo la fuente.
+    """
+    try:
+        docs = list(mongo.db.expedienteclinico.find({}, {'PDFSegurodegastosmedicos': 0}))
+        return jsonify([_serialize(d) for d in docs]), 200
+    except Exception as e:
+        logging.error(f"Error listando expedientes: {e}")
         return jsonify({'error': str(e)}), 500
 
 

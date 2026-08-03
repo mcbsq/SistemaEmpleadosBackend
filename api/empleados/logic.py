@@ -5,6 +5,8 @@ from bson.errors import InvalidId
 import json
 import logging
 
+from core.audit import registrar_auditoria, diff_documentos
+
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -29,6 +31,28 @@ def _area_propia_empleado(mongo, identity):
     except (InvalidId, Exception):
         return None
     return propio.get('depto_id') if propio else None
+
+
+def _equipo_directo_ids(mongo, identity):
+    """
+    IDs de empleados cuyo JefeInmediato_id (en rh) es el propio JEFE_AREA.
+    Implementa el permiso "solo_equipo_directo": un JEFE_AREA solo ve a
+    quienes le reportan directamente, no a todo el organigrama.
+    """
+    if not isinstance(identity, dict):
+        return []
+    own_empleado_id = identity.get('empleado_id')
+    if not own_empleado_id:
+        return []
+    docs = mongo.db.rh.find({'JefeInmediato_id': str(own_empleado_id)}, {'empleado_id': 1})
+    ids = []
+    for d in docs:
+        eid = d.get('empleado_id')
+        try:
+            ids.append(ObjectId(eid))
+        except (InvalidId, TypeError):
+            pass
+    return ids
 
 
 def _areas_admin(identity):
@@ -103,6 +127,13 @@ def get_empleados(mongo, identity=None):
         elif role == 'EMPLOYEE':
             area_propia = _area_propia_empleado(mongo, identity)
             query["depto_id"] = area_propia if area_propia else "__sin_area_asignada__"
+        elif role == 'JEFE_AREA':
+            # "solo_equipo_directo": nunca ve la nómina completa, solo a
+            # quienes le reportan (rh.JefeInmediato_id == su empleado_id).
+            equipo = _equipo_directo_ids(mongo, identity)
+            query["_id"] = {"$in": equipo} if equipo else {"$in": []}
+        # CONTADOR, PROJECT_MANAGER y MEDICO ven la nómina completa: la
+        # analítica financiera, de proyectos y clínica opera a nivel empresa.
 
         empleados = list(mongo.db.empleados.find(query))
         formatted = []
@@ -142,14 +173,48 @@ def get_empleado(id, mongo, identity=None):
         return jsonify({'message': 'ID inválido', 'error': str(e)}), 400
 
 
+# Colecciones que cuelgan de un empleado y su campo de vínculo. Antes el
+# DELETE no las tocaba: cada empleado borrado dejaba RH/dirección/contactos/
+# educación/expediente huérfanos para siempre en Mongo (encontrado auditando
+# los dashboards de CONTADOR/MEDICO, que sí listan esas colecciones completas).
+_COLECCIONES_HIJAS = {
+    'rh':                'empleado_id',   # ObjectId
+    'direccion':         'empleado_id',   # string
+    'datoscontacto':     'EmpleadoId',    # ObjectId
+    'personascontacto':  'empleado_id',   # string
+    'educacion':         'empleado_id',   # ObjectId
+    'expedienteclinico': 'empleado_id',   # string
+    'redsocial':         'empleado_id',   # string
+}
+
+
 # --- DELETE ---
-def delete_empleado(id, mongo):
-    # Sin cambios de lógica: ya restringido a SUPER_ADMIN a nivel de ruta.
+def delete_empleado(id, mongo, identity=None):
+    # Sin cambios en la restricción de rol: ya limitado a SUPER_ADMIN en la ruta.
     try:
-        result = mongo.db.empleados.delete_one({'_id': ObjectId(id)})
-        if result.deleted_count > 0:
-            return jsonify({'message': f'Empleado {id} eliminado exitosamente'}), 200
-        return jsonify({'message': 'No se encontró el empleado para eliminar'}), 404
+        eid = ObjectId(id)
+        empleado_borrado = mongo.db.empleados.find_one({'_id': eid})
+        result = mongo.db.empleados.delete_one({'_id': eid})
+        if result.deleted_count == 0:
+            return jsonify({'message': 'No se encontró el empleado para eliminar'}), 404
+
+        borrados = 0
+        for coleccion, campo in _COLECCIONES_HIJAS.items():
+            r1 = mongo.db[coleccion].delete_many({campo: eid})
+            r2 = mongo.db[coleccion].delete_many({campo: id})
+            borrados += r1.deleted_count + r2.deleted_count
+
+        if isinstance(identity, dict):
+            registrar_auditoria(
+                mongo, identity.get('user'), identity.get('role'),
+                'delete', 'empleados', id,
+                detalle=f"Nombre: {empleado_borrado.get('Nombre','')} {empleado_borrado.get('ApelPaterno','')}" if empleado_borrado else None,
+            )
+
+        return jsonify({
+            'message': f'Empleado {id} eliminado exitosamente',
+            'documentos_relacionados_eliminados': borrados,
+        }), 200
     except Exception as e:
         return jsonify({'message': 'Error al procesar el ID', 'error': str(e)}), 400
 
@@ -171,13 +236,13 @@ def update_empleado(id, mongo, identity=None):
             if empleado_actual.get('depto_id') not in areas:
                 return jsonify({'error': 'Acceso no autorizado'}), 403
 
+        # Solo se incluyen los campos que el caller realmente mandó — un PUT
+        # parcial (ej. solo {"Cargo": "..."}) no debe borrar el resto de los
+        # campos del empleado con null.
         up = {
-            'Nombre': data.get('Nombre'),
-            'ApelPaterno': data.get('ApelPaterno'),
-            'ApelMaterno': data.get('ApelMaterno'),
-            'Cargo': data.get('Cargo'),
-            'FecNacimiento': data.get('FecNacimiento'),
-            'Fotografias': data.get('Fotografias', [])
+            campo: data[campo]
+            for campo in ('Nombre', 'ApelPaterno', 'ApelMaterno', 'Cargo', 'FecNacimiento', 'Fotografias')
+            if campo in data
         }
 
         if 'depto_id' in data:
@@ -190,7 +255,14 @@ def update_empleado(id, mongo, identity=None):
             else:
                 up['depto_id'] = data['depto_id']
 
+        antes = mongo.db.empleados.find_one({'_id': ObjectId(id)}) or {}
         mongo.db.empleados.update_one({'_id': ObjectId(id)}, {'$set': up})
+
+        cambios = diff_documentos(antes, {**antes, **up})
+        if cambios:
+            registrar_auditoria(mongo, identity.get('user') if isinstance(identity, dict) else None,
+                                 role, 'update', 'empleados', id, cambios=cambios)
+
         return jsonify({'message': 'Actualizado exitosamente'}), 200
     except Exception as e:
         return jsonify({'message': 'Error al actualizar', 'error': str(e)}), 400

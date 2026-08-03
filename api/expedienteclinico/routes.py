@@ -2,12 +2,14 @@ from flask import request, jsonify
 from flask_jwt_extended import get_jwt
 from .logic import (
     create_or_update_expediente,
+    get_all_expedientes,
     get_expedienteclinicos_by_empleado,
     get_expedienteclinico,
     delete_expedienteclinico,
     update_expedienteclinico_empleado,
 )
 from api.auth_decorators import require_roles, require_self_or_roles
+from core.permissions import require_roles_or_permission
 
 # Dato sensible (salud) — se trata con el criterio más estricto de todo el
 # proyecto: EMPLOYEE solo puede tocar su propio expediente, nunca el de
@@ -31,13 +33,23 @@ def setup_expedienteclinico_routes(app, mongo):
 
         return create_or_update_expediente(mongo, empleado_id, data)
 
+    # Listado completo (sin PDF) para el dashboard de MEDICO. Antes no existía
+    # esta ruta y el frontend usaba un stub que siempre devolvía []: el
+    # dashboard médico mostraba "0 con expediente" sin importar los datos reales.
+    @app.route('/expedienteclinico', methods=['GET'])
+    @require_roles_or_permission(mongo, 'ver_expediente', 'ADMIN', 'SUPER_ADMIN', 'MEDICO')
+    def get_all_expedientes_route():
+        return get_all_expedientes(mongo)
+
+    # MEDICO tiene "ver_expediente" — puede leer, nunca crear/editar/borrar
+    # (eso sigue reservado a ADMIN/SUPER_ADMIN/el propio empleado).
     @app.route('/expedienteclinico/empleado/<empleado_id>', methods=['GET'])
-    @require_self_or_roles('empleado_id', 'ADMIN', 'SUPER_ADMIN')
+    @require_self_or_roles('empleado_id', 'ADMIN', 'SUPER_ADMIN', 'MEDICO')
     def get_expediente_by_empleado_route(empleado_id):
         return get_expedienteclinicos_by_empleado(mongo, empleado_id)
 
     @app.route('/expedienteclinico/<id>', methods=['GET'])
-    @require_roles('ADMIN', 'SUPER_ADMIN')
+    @require_roles_or_permission(mongo, 'ver_expediente', 'ADMIN', 'SUPER_ADMIN', 'MEDICO')
     def get_expediente_route(id):
         return get_expedienteclinico(mongo, id)
 

@@ -6,6 +6,8 @@ from bson.errors import InvalidId
 import json
 import logging
 
+from core.audit import registrar_auditoria, diff_documentos
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,16 +19,29 @@ def _serialize(doc):
     return doc
 
 
+# Campos sensibles (financieros/identidad/documentos) que solo ADMIN,
+# SUPER_ADMIN y CONTADOR (rol financiero) deben ver en el listado completo.
+# PROJECT_MANAGER y JEFE_AREA acceden a esta misma ruta solo para puesto/
+# departamento de su equipo — no deben recibir salario ni documentos.
+_CAMPOS_SENSIBLES_RH = (
+    "Salario", "CURP", "RFC", "ExpedienteDigitalPDF", "CamposPersonalizados",
+)
+
+
 # ── GET todos ─────────────────────────────────────────────────────────────────
-def get_rhs(mongo):
+def get_rhs(mongo, role=None):
     try:
         rh_list   = list(mongo.db.rh.find())
         empleados = {
             str(e['_id']): f"{e.get('Nombre','')} {e.get('ApelPaterno','')} {e.get('ApelMaterno','')}"
             for e in mongo.db.empleados.find()
         }
+        redactar = role not in ("ADMIN", "SUPER_ADMIN", "CONTADOR")
         for doc in rh_list:
             doc['NombreCompleto'] = empleados.get(str(doc.get('empleado_id', '')), '')
+            if redactar:
+                for campo in _CAMPOS_SENSIBLES_RH:
+                    doc.pop(campo, None)
         return Response(json_util.dumps(rh_list), mimetype="application/json")
     except Exception as e:
         logger.error(f"Error en get_rhs: {e}")
@@ -66,17 +81,50 @@ def create_rh(mongo, empleado_id, rh_data):
 
 
 # ── UPDATE ────────────────────────────────────────────────────────────────────
-def update_rh(mongo, empleado_id, rh_data):
+def _filtrar_payload_por_presentes(payload, data):
+    """
+    Un PUT parcial (ej. solo {"Salario": 25000}) no debe borrar el resto del
+    documento RH con los defaults de _build_payload — solo se aplican los
+    campos que el caller realmente mandó.
+    """
+    SIMPLES = (
+        'Puesto', 'JefeInmediato', 'JefeInmediato_id', 'HorarioLaboral',
+        'NombreCompleto', 'Departamento', 'FechaIngreso', 'NumeroEmpleado',
+        'CURP', 'RFC', 'EstadoCivil', 'Nacionalidad', 'Salario',
+        'TipoRelacionLaboral',
+    )
+    out = {'empleado_id': payload['empleado_id']}
+    for campo in SIMPLES:
+        if campo in data:
+            out[campo] = payload[campo]
+    if 'ExpedienteDigitalPDF' in data:
+        out['ExpedienteDigitalPDF'] = payload['ExpedienteDigitalPDF']
+    if 'tipo_contrato' in data or 'contrato_firmado' in data:
+        out['tipo_contrato'] = payload['tipo_contrato']
+        out['contrato_firmado'] = payload['contrato_firmado']
+    if 'CamposPersonalizados' in data:
+        out['CamposPersonalizados'] = payload['CamposPersonalizados']
+    return out
+
+
+def update_rh(mongo, empleado_id, rh_data, identity=None):
     try:
         data    = request.get_json(silent=True) or {}
         eid     = ObjectId(empleado_id)
-        payload = _build_payload(eid, data)
+        payload = _filtrar_payload_por_presentes(_build_payload(eid, data), data)
 
+        antes = mongo.db.rh.find_one({'empleado_id': eid}) or {}
         mongo.db.rh.update_one(
             {'empleado_id': eid},
             {'$set': payload},
             upsert=True,
         )
+
+        cambios = diff_documentos(antes, {**antes, **payload})
+        if cambios and isinstance(identity, dict):
+            registrar_auditoria(mongo, identity.get('user'), identity.get('role'),
+                                 'update', 'rh', empleado_id, cambios=cambios)
+
         return jsonify({'message': f'RH actualizado para empleado {empleado_id}'}), 200
     except (InvalidId, Exception) as e:
         logger.error(f"Error en update_rh: {e}")
@@ -147,4 +195,8 @@ def _build_payload(eid, data):
         'Nacionalidad':         data.get('Nacionalidad',       ''),
         'Salario':              data.get('Salario',            ''),
         'CamposPersonalizados': campos,
+        # Determina qué sección financiera ve el empleado en su perfil:
+        # "nomina" -> recibos de nómina (los sube RH); "prestador_servicios"
+        # -> el propio empleado sube su CFDI para que le paguen.
+        'TipoRelacionLaboral':  data.get('TipoRelacionLaboral', 'nomina'),
     }

@@ -28,6 +28,7 @@ import sys
 from datetime import datetime
 
 from pymongo import MongoClient
+from bson import ObjectId
 from werkzeug.security import generate_password_hash
 
 # Permite `python seed.py` desde la raíz del proyecto (import core.*)
@@ -146,8 +147,13 @@ def seed():
         emp_result = db.empleados.insert_one(emp_data)
         empleado_id = str(emp_result.inserted_id)
 
+        # empleado_id como ObjectId: get_rh_by_empleado_id/update_rh (api/rh/logic.py)
+        # siempre consultan por ObjectId. Guardarlo como string aquí creaba un
+        # documento RH "fantasma" que nunca hacía match con esas rutas, y quedaba
+        # duplicado en cuanto el perfil actualizaba RH (bug real encontrado
+        # auditando el listado de RH para roles CONTADOR/PM/JEFE_AREA).
         db.rh.insert_one({
-            "empleado_id": empleado_id,
+            "empleado_id": ObjectId(empleado_id),
             "Puesto":      cuenta["empleado"]["Cargo"],
             "depto_id":    cuenta["empleado"]["depto_id"],
             "JefeInmediato": "",

@@ -19,35 +19,10 @@ import logging
 
 from core.aegis_config import get_aegis_settings
 from core.aegis_client import aegis_password_login, aegis_get_me, aegis_change_password
+from core.permissions import PERMISOS_DEFAULT, DASHBOARD_MODULOS, get_permisos_for_role
+from core.fechas_especiales import verificar_fechas_especiales
 
 logger = logging.getLogger(__name__)
-
-# ─── Permisos por rol (espejo del frontend) ───────────────────────────────────
-PERMISOS_DEFAULT = {
-    "SUPER_ADMIN":     ["*"],
-    "ADMIN":           ["ver_empleados","crud_empleados","ver_expediente","ver_rh",
-                        "ver_proyectos","ver_organigrama","ver_habilidades",
-                        "ver_dashboard","ver_carrusel"],
-    "EMPLOYEE":        ["ver_organigrama","ver_carrusel","ver_perfil_propio"],
-    "JEFE_AREA":       ["ver_empleados","ver_organigrama","ver_proyectos",
-                        "ver_habilidades","solo_equipo_directo","ver_carrusel",
-                        "ver_dashboard"],
-    "CONTADOR":        ["ver_empleados","ver_rh","ver_organigrama","ver_dashboard","ver_carrusel"],
-    "PROJECT_MANAGER": ["ver_empleados","ver_proyectos","ver_habilidades",
-                        "ver_organigrama","ver_dashboard","ver_carrusel"],
-    "MEDICO":          ["ver_empleados","ver_expediente","ver_organigrama",
-                        "ver_dashboard","ver_carrusel"],
-}
-
-DASHBOARD_MODULOS = {
-    "SUPER_ADMIN":     ["dashboard_admin","home_carousel","organigrama"],
-    "ADMIN":           ["dashboard_admin","home_carousel","organigrama"],
-    "EMPLOYEE":        ["home_carousel","organigrama"],
-    "JEFE_AREA":       ["dashboard_jefe_area","home_carousel","organigrama"],
-    "CONTADOR":        ["dashboard_contador","home_carousel","organigrama"],
-    "PROJECT_MANAGER": ["dashboard_pm","home_carousel","organigrama"],
-    "MEDICO":          ["dashboard_medico","home_carousel","organigrama"],
-}
 
 
 def _find_usuario_after_aegis(mongo, profile: dict):
@@ -82,7 +57,7 @@ def _find_usuario_after_aegis(mongo, profile: dict):
     return None
 
 
-def _issue_token_response(usuario: dict, login_label: str, must_change_password: bool = False):
+def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_password: bool = False):
     """
     Emite el access_token de Flask-JWT. El claim "sub" es el username (string,
     exigido por RFC 7519 / validado por PyJWT >= 2.10); el resto de la identidad
@@ -95,8 +70,15 @@ def _issue_token_response(usuario: dict, login_label: str, must_change_password:
     empleado_id = str(usuario.get("empleado_id") or "")
     org_id = usuario.get("org_id", "default")
 
-    permisos = usuario.get("permisos") or PERMISOS_DEFAULT.get(role, PERMISOS_DEFAULT["EMPLOYEE"])
-    modulos = usuario.get("modulos") or DASHBOARD_MODULOS.get(role, DASHBOARD_MODULOS["EMPLOYEE"])
+    # Roles de sistema: tabla fija. Roles personalizados (creados en Gestión
+    # de roles): se resuelven en vivo contra roles_custom, para que el login
+    # de un rol inventado por el cliente refleje sus permisos reales.
+    if role in PERMISOS_DEFAULT:
+        permisos = usuario.get("permisos") or PERMISOS_DEFAULT[role]
+        modulos = usuario.get("modulos") or DASHBOARD_MODULOS.get(role, DASHBOARD_MODULOS["EMPLOYEE"])
+    else:
+        permisos = usuario.get("permisos") or get_permisos_for_role(mongo, role) or PERMISOS_DEFAULT["EMPLOYEE"]
+        modulos = usuario.get("modulos") or DASHBOARD_MODULOS["EMPLOYEE"]
 
     # Solo tiene efecto real para ADMIN; SUPER_ADMIN ve todo y EMPLOYEE usa
     # su propia área (resuelta en empleados/logic.py vía su empleado_id).
@@ -112,6 +94,7 @@ def _issue_token_response(usuario: dict, login_label: str, must_change_password:
     access_token = create_access_token(identity=user, additional_claims=claims)
 
     logger.info("Login exitoso: %s (%s)", user, role)
+    verificar_fechas_especiales(mongo)
 
     return jsonify({
         "access_token":         access_token,
@@ -141,7 +124,7 @@ def _login_legacy(mongo, user, password):
         logger.warning("Login fallido — contraseña incorrecta: %s", user)
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
-    return _issue_token_response(usuario, user)
+    return _issue_token_response(mongo, usuario, user)
 
 
 def login(mongo, identifier, password):
@@ -201,6 +184,7 @@ def login(mongo, identifier, password):
             # Mongo. must_change_password viene de Aegis: True cuando el usuario
             # sigue usando una contraseña temporal generada por el admin.
             return _issue_token_response(
+                mongo,
                 usuario,
                 identifier.strip(),
                 must_change_password=bool(tokens.get("must_change_password")),

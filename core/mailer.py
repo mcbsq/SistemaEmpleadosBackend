@@ -75,3 +75,37 @@ def send_temp_password_email(to_email: str, login_user: str, temp_password: str)
         # Nunca registrar la contraseña; solo el destinatario y el error.
         logger.error("Fallo enviando correo a %s: %s", to_email, e)
         return False
+
+
+def send_generic_email(to_email: str, asunto: str, cuerpo: str) -> bool:
+    """
+    Envío genérico para notificaciones del sistema (solicitudes de vacaciones,
+    aprobaciones, etc.) que no involucran datos sensibles como contraseñas.
+    """
+    if not mailer_enabled():
+        return False
+
+    host = os.environ["SMTP_HOST"].strip()
+    port = int(os.environ.get("SMTP_PORT") or "587")
+    user = (os.environ.get("SMTP_USER") or "").strip()
+    password = os.environ.get("SMTP_PASSWORD") or ""
+    sender = (os.environ.get("SMTP_FROM") or user).strip()
+    use_tls = _truthy(os.environ.get("SMTP_TLS"), True)
+
+    msg = EmailMessage()
+    msg["Subject"] = asunto
+    msg["From"] = sender
+    msg["To"] = to_email
+    msg.set_content(cuerpo)
+
+    try:
+        with smtplib.SMTP(host, port, timeout=15) as smtp:
+            if use_tls:
+                smtp.starttls()
+            if user:
+                smtp.login(user, password)
+            smtp.send_message(msg)
+        return True
+    except Exception as e:
+        logger.error("Fallo enviando correo a %s: %s", to_email, e)
+        return False
