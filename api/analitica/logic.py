@@ -6,7 +6,7 @@
 from flask import jsonify, send_file
 
 from core.audit import registrar_auditoria
-from core.reportes import CATALOGO_REPORTES, GENERADORES
+from core.reportes import CATALOGO_REPORTES, GENERADORES, obtener_datos_reporte
 
 ROLES_TODOS = ("EMPLOYEE", "JEFE_AREA", "CONTADOR", "PROJECT_MANAGER", "MEDICO")
 
@@ -144,6 +144,28 @@ def resumen_sistema(mongo, identity):
         }
 
     return jsonify(resumen), 200
+
+
+def _tiene_acceso_reporte(mongo, identity, reporte_id):
+    role = identity.get("role") if isinstance(identity, dict) else None
+    if role in ("ADMIN", "SUPER_ADMIN"):
+        return True
+    permisos = get_permisos(mongo)
+    return reporte_id in permisos.get(role, [])
+
+
+def ver_reporte(mongo, reporte_id, identity):
+    """Datos del reporte para mostrarlo en pantalla — sin generar archivo.
+    El cliente pidió explícitamente poder ver los reportes en línea en vez de
+    tener que exportar siempre a Excel para consultarlos."""
+    if not _tiene_acceso_reporte(mongo, identity, reporte_id):
+        return jsonify({"error": "No tienes permiso para ver este reporte"}), 403
+
+    datos = obtener_datos_reporte(mongo, reporte_id)
+    if datos is None:
+        return jsonify({"error": "Reporte no encontrado"}), 404
+
+    return jsonify(datos), 200
 
 
 def exportar_reporte(mongo, reporte_id, identity):

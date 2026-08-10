@@ -17,3 +17,8 @@ Werkzeug==2.3.7
 wheel==0.44.0
 openpyxl==3.1.5
 et-xmlfile==2.0.0
+cryptography==50.0.0
+
+# ─── Solo para pruebas (tests/) ────────────────────────────────────────────
+pytest==9.1.1
+requests-mock==1.12.1

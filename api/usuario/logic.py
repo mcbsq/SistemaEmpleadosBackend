@@ -21,6 +21,7 @@ from core.aegis_config import get_aegis_settings
 from core.aegis_client import (aegis_admin_create_user, aegis_admin_reset_password,
                                aegis_admin_list_users, aegis_admin_set_active)
 from core.mailer import send_temp_password_email
+from core.audit import registrar_auditoria
 
 
 def _serialize(doc):
@@ -86,7 +87,8 @@ def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE', email=No
         temp_password = None
         if s["admin_enabled"]:
             # Primero identidad en Aegis; si falla, no insertamos en Mongo (evita usuarios huérfanos).
-            created, err = aegis_admin_create_user(email_clean)
+            aegis_role = "admin" if role in ("ADMIN", "SUPER_ADMIN") else "empleado"
+            created, err = aegis_admin_create_user(email_clean, role=aegis_role)
             if err:
                 body, status = err
                 logging.warning("Aegis admin create user falló: %s %s", status, body)
@@ -187,7 +189,7 @@ def get_usuario(mongo, id):
         return jsonify({'error': str(e)}), 400
 
 
-def update_usuario(mongo, id, user=None, password=None, role=None, areas_administradas=None):
+def update_usuario(mongo, id, user=None, password=None, role=None, areas_administradas=None, identity=None):
     try:
         doc = mongo.db.usuario.find_one({'_id': ObjectId(id)})
         if not doc:
@@ -234,6 +236,10 @@ def update_usuario(mongo, id, user=None, password=None, role=None, areas_adminis
             mongo.db.usuario.update_one({'_id': ObjectId(id)}, {'$set': update})
         respuesta = {'message': 'Usuario actualizado'}
         if temp_password:
+            actor = identity.get('user') if isinstance(identity, dict) else None
+            actor_role = identity.get('role') if isinstance(identity, dict) else None
+            registrar_auditoria(mongo, actor, actor_role, "update", "usuario", id,
+                                 detalle=f"Contraseña restablecida para {doc.get('user','')} (sin registrar el valor)")
             destino = doc.get('email')
             if destino and send_temp_password_email(destino, doc.get('user', ''), temp_password):
                 respuesta['email_sent'] = True

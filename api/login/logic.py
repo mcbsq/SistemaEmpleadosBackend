@@ -12,13 +12,13 @@
 # refleja hasta que vuelva a iniciar sesión (el JWT viejo conserva las áreas
 # con las que se emitió).
 # ─────────────────────────────────────────────────────────────────────────────
-from flask import jsonify
+from flask import jsonify, g
 from werkzeug.security import check_password_hash
 from flask_jwt_extended import create_access_token
 import logging
 
 from core.aegis_config import get_aegis_settings
-from core.aegis_client import aegis_password_login, aegis_get_me, aegis_change_password
+from core.aegis_client import aegis_password_login, aegis_get_me, aegis_change_password, aegis_resolve_tenant
 from core.permissions import PERMISOS_DEFAULT, DASHBOARD_MODULOS, get_permisos_for_role
 from core.fechas_especiales import verificar_fechas_especiales
 
@@ -57,18 +57,23 @@ def _find_usuario_after_aegis(mongo, profile: dict):
     return None
 
 
-def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_password: bool = False):
+def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_password: bool = False, org_id: str = None):
     """
     Emite el access_token de Flask-JWT. El claim "sub" es el username (string,
     exigido por RFC 7519 / validado por PyJWT >= 2.10); el resto de la identidad
     (role, empleado_id, org_id, areas_administradas) va como additional_claims
     y se lee con get_jwt() en vez de get_jwt_identity() en el resto de la API.
     login_label solo ayuda si falta user en el doc.
+
+    org_id: el tenant YA resuelto contra Aegis (autoridad real de a qué
+    empresa pertenece este login) tiene prioridad sobre lo que diga el doc de
+    Mongo — así una cuenta legacy sin org_id migrado igual queda con el
+    tenant correcto en el JWT desde el primer login post-migración.
     """
     user = usuario.get("user") or login_label
     role = usuario.get("role", "EMPLOYEE")
     empleado_id = str(usuario.get("empleado_id") or "")
-    org_id = usuario.get("org_id", "default")
+    org_id = org_id or usuario.get("org_id") or "cibercom"
 
     # Roles de sistema: tabla fija. Roles personalizados (creados en Gestión
     # de roles): se resuelven en vivo contra roles_custom, para que el login
@@ -114,6 +119,9 @@ def _login_legacy(mongo, user, password):
     if not user or not password:
         return jsonify({"error": "Usuario y contraseña son requeridos"}), 400
 
+    # Sin Aegis no hay tenant que resolver — todo lo que vive en modo legacy
+    # pertenece al único tenant de este despliegue.
+    g.org_id = "cibercom"
     usuario = mongo.db.usuario.find_one({"user": user})
     if not usuario:
         logger.warning("Login fallido — usuario no encontrado: %s", user)
@@ -140,8 +148,28 @@ def login(mongo, identifier, password):
         settings = get_aegis_settings()
 
         if settings["login_enabled"]:
+            # 0) Resolver el tenant dinámicamente (Aegis es multi-tenant: el
+            # mismo identifier puede existir en varias empresas). Si no se
+            # encuentra bajo la app nueva ("empleados"), se cae al par
+            # tenant/app legacy ("cibercom"/"principal") con el que se crearon
+            # las cuentas antes de este cambio — así ninguna cuenta existente
+            # se rompe mientras se completa la migración.
+            tenant_id, app_id = settings["tenant_id"], settings["app_id"]
+            resolved, resolve_err = aegis_resolve_tenant(identifier, settings["app_id"])
+            if resolved:
+                tenant_id, app_id = resolved["tenant_key"], resolved["app_key"]
+            elif resolve_err and resolve_err[1] == 409:
+                logger.warning("Aegis resolve-tenant ambiguo para identifier=%s", identifier[:3] + "...")
+                return jsonify({
+                    "error": "Tu cuenta pertenece a más de una empresa. Contacta a soporte para continuar.",
+                }), 409
+            else:
+                # 404 (u otro): probablemente cuenta legacy sin app_permissions
+                # nuevas — se reintenta con el par estático de antes.
+                tenant_id, app_id = settings["tenant_id"], settings["legacy_app_id"]
+
             # 1) Autenticar contra Aegis (contraseña vive allí).
-            tokens, err = aegis_password_login(identifier, password)
+            tokens, err = aegis_password_login(identifier, password, tenant_id=tenant_id, app_id=app_id)
             if err:
                 body, status = err
                 # Transición: opcionalmente reintentar con hash Mongo si Aegis falla.
@@ -163,22 +191,50 @@ def login(mongo, identifier, password):
                 return jsonify({"error": "Error interno del servidor"}), 502
 
             # 2) Saber email/id canónico en Aegis para buscar la fila en Mongo.
-            profile, me_err = aegis_get_me(access_token)
+            profile, me_err = aegis_get_me(access_token, tenant_id=tenant_id, app_id=app_id)
             if me_err:
                 body, status = me_err
                 logger.error("Aegis /v1/me falló: %s %s", status, body)
                 return jsonify({"error": "No se pudo validar la sesión"}), 502
 
+            # Multi-tenencia: a partir de aquí toda consulta a Mongo (incluida
+            # la búsqueda del usuario que sigue) queda aislada a la empresa
+            # que Aegis acaba de resolver — es la autoridad real del tenant,
+            # no algo que este backend deba adivinar.
+            g.org_id = tenant_id
             usuario = _find_usuario_after_aegis(mongo, profile)
             if not usuario:
-                logger.warning(
-                    "Login Aegis OK pero sin fila en Mongo (id=%s email=%s)",
-                    profile.get("id"),
-                    profile.get("email"),
-                )
-                return jsonify({
-                    "error": "Usuario no registrado en el sistema de empleados. Contacte al administrador.",
-                }), 403
+                # Auto-aprovisionamiento tipo Notion: si esta empresa (tenant_id)
+                # nunca ha tenido NADIE en este sistema, la primera persona que
+                # logra loguearse (ya con su cuenta creada del lado de Aegis)
+                # se convierte automáticamente en SUPER_ADMIN de su propio
+                # espacio aislado — nadie de Cibercom tiene que intervenir a
+                # mano. Si la empresa YA tiene gente dada de alta y esta
+                # persona no es una de ellas, sigue siendo un 403 (necesita
+                # que su propio SUPER_ADMIN la invite).
+                if tenant_id != settings["tenant_id"] and mongo.db.usuario.count_documents({}) == 0:
+                    email = (profile.get("email") or "").strip().lower()
+                    usuario = {
+                        "user": email.split("@", 1)[0] if email else f"admin_{tenant_id}",
+                        "role": "SUPER_ADMIN",
+                        "empleado_id": None,
+                        "email": email or None,
+                        "aegis_user_id": profile.get("id"),
+                        "org_id": tenant_id,
+                    }
+                    mongo.db.usuario.insert_one(dict(usuario))
+                    logger.info(
+                        "Auto-aprovisionado primer SUPER_ADMIN de tenant nuevo '%s': %s",
+                        tenant_id, usuario["user"],
+                    )
+                else:
+                    logger.warning(
+                        "Login Aegis OK pero sin fila en Mongo (tenant=%s id=%s email=%s)",
+                        tenant_id, profile.get("id"), profile.get("email"),
+                    )
+                    return jsonify({
+                        "error": "Usuario no registrado en el sistema de empleados. Contacte al administrador.",
+                    }), 403
 
             # 3) Respuesta idéntica a la histórica: JWT propio + permisos desde
             # Mongo. must_change_password viene de Aegis: True cuando el usuario
@@ -188,6 +244,7 @@ def login(mongo, identifier, password):
                 usuario,
                 identifier.strip(),
                 must_change_password=bool(tokens.get("must_change_password")),
+                org_id=tenant_id,
             )
 
         return _login_legacy(mongo, identifier.strip(), password)

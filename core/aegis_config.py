@@ -24,9 +24,17 @@ def get_aegis_settings():
     """
     base = (os.environ.get("AEGIS_BASE_URL") or "").strip().rstrip("/")
     tenant_id = (os.environ.get("AEGIS_TENANT_ID") or "").strip()
-    app_id = (os.environ.get("AEGIS_APP_ID") or "").strip()
     api_key = (os.environ.get("AEGIS_API_KEY") or "").strip()
     timeout = float(os.environ.get("AEGIS_TIMEOUT") or "15")
+
+    # Aegis pasó a multi-tenant/multi-app: "empleados" es la app registrada en
+    # el catálogo nuevo (resolve-tenant + app_permissions al crear usuarios).
+    # "principal" es la app legacy con la que se crearon las cuentas de este
+    # backend antes de ese cambio — sigue autenticando por login directo, pero
+    # resolve-tenant no la reconoce. Se usa solo como último recurso.
+    app_id = (os.environ.get("AEGIS_APP_ID") or "empleados").strip()
+    legacy_app_id = (os.environ.get("AEGIS_LEGACY_APP_ID") or "principal").strip()
+
     # Si Aegis rechaza credenciales o no responde, ¿intentamos login viejo con Mongo?
     legacy_fallback = _truthy(os.environ.get("AEGIS_LEGACY_LOGIN_FALLBACK"), False)
     explicit_off = _truthy(os.environ.get("AEGIS_DISABLED"), False)
@@ -36,6 +44,7 @@ def get_aegis_settings():
         "base_url": base,
         "tenant_id": tenant_id,
         "app_id": app_id,
+        "legacy_app_id": legacy_app_id,
         "api_key": api_key,
         "timeout": timeout,
         "legacy_fallback": legacy_fallback,

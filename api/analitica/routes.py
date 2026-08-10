@@ -2,7 +2,7 @@ from flask import request
 from flask_jwt_extended import get_jwt, jwt_required
 
 from api.auth_decorators import require_roles
-from .logic import get_catalogo_route, get_permisos_route, guardar_permisos, exportar_reporte, resumen_sistema
+from .logic import get_catalogo_route, get_permisos_route, guardar_permisos, exportar_reporte, resumen_sistema, ver_reporte
 
 
 def setup_analitica_routes(app, mongo):
@@ -31,3 +31,8 @@ def setup_analitica_routes(app, mongo):
     @jwt_required()
     def export_reporte_route(reporte_id):
         return exportar_reporte(mongo, reporte_id, get_jwt())
+
+    @app.route('/analitica/reportes/<reporte_id>/datos', methods=['GET'])
+    @jwt_required()
+    def ver_reporte_route(reporte_id):
+        return ver_reporte(mongo, reporte_id, get_jwt())

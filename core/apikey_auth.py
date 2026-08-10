@@ -13,7 +13,7 @@ import hashlib
 import secrets
 import threading
 
-from flask import request, jsonify
+from flask import request, jsonify, g
 
 KEY_PREFIX = "sk_live_"
 
@@ -74,10 +74,20 @@ def require_api_key(mongo, *scopes_validos):
                     "code": "missing_key",
                 }), 401
 
+            # Búsqueda por hash SIN aislar por tenant todavía — la key en sí
+            # es lo único que identifica a qué empresa pertenece esta
+            # request; no hay JWT ni org_id previo del que partir. Como
+            # g.org_id sigue en None a esta altura (before_request no vio
+            # JWT en esta request), mongo.db.api_keys.find_one aquí ya
+            # busca sin filtrar — ver core/tenant_db.py.
             key_hash = _hash_key(plaintext)
             doc = mongo.db.api_keys.find_one({"key_hash": key_hash})
             if not doc or not doc.get("activa", False):
                 return jsonify({"error": "API key inválida o revocada", "code": "invalid_key"}), 401
+
+            # A partir de aquí, todo lo que la ruta haga con mongo.db queda
+            # aislado a la empresa dueña de esta key.
+            g.org_id = doc.get("org_id", "cibercom")
 
             if _rate_limited(key_hash):
                 return jsonify({

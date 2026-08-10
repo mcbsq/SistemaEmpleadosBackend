@@ -12,11 +12,13 @@ try:
 except ImportError:
     pass
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 from pymongo import MongoClient
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager
+from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt
 from werkzeug.security import generate_password_hash
+
+from core.tenant_db import BaseDatosMultiTenant
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -44,6 +46,28 @@ def handle_preflight():
         return response
 
 
+@app.before_request
+def cargar_org_id():
+    """
+    Aislamiento multi-tenant: toda request con un JWT válido trae su org_id
+    (el tenant resuelto en el login, ver api/login/logic.py) — se guarda en
+    flask.g para que core/tenant_db.py filtre automáticamente cada consulta
+    a Mongo por esa empresa. Rutas sin JWT (login, health) simplemente no
+    tienen org_id todavía; el propio flujo de login lo fija a mano una vez
+    que resuelve el tenant contra Aegis (ver _issue_token_response).
+    Nunca lanza: un token ausente o inválido aquí no debe tumbar la request,
+    eso ya lo decide el @jwt_required() de la ruta específica.
+    """
+    g.org_id = None
+    try:
+        verify_jwt_in_request(optional=True)
+        claims = get_jwt()
+        if claims:
+            g.org_id = claims.get("org_id")
+    except Exception:
+        pass
+
+
 # ─── Configuración obligatoria por variable de entorno ─────────────────────
 # Sin default: si falta, el arranque falla explícito en vez de usar un
 # secreto débil o una credencial real hardcodeada en el repo.
@@ -58,6 +82,14 @@ app.config['UPLOAD_FOLDER'] = os.environ.get(
     'UPLOAD_FOLDER',
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api', 'expedienteclinico_pdf'),
 )
+
+# Duración del access token — el sistema está pensado para sesiones largas
+# (un admin puede estar horas dentro de un expediente), así que se fija
+# explícito en 15 minutos en vez de depender del default de la librería
+# (que también son 15, pero sin esto no queda documentado ni es obvio dónde
+# tocar si algún día hay que ajustarlo).
+from datetime import timedelta
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=int(os.environ.get('JWT_ACCESS_MINUTES', 15)))
 
 jwt = JWTManager(app)
 
@@ -83,6 +115,12 @@ try:
 except Exception as e:
     logger.error(f"ERROR CRÍTICO: No se pudo conectar a MongoDB: {str(e)}")
     sys.exit(1)
+
+# Multi-tenencia real: a partir de aquí, mongo.db.<coleccion> filtra/etiqueta
+# automáticamente por org_id (ver core/tenant_db.py). mongo.db.raw da acceso
+# directo sin aislar, solo para los pocos casos que deliberadamente cruzan
+# tenants (validar API keys por hash, el script de migración).
+mongo.db = BaseDatosMultiTenant(mongo.db)
 
 
 def create_super_admin():
@@ -112,7 +150,7 @@ def create_super_admin():
             'password': generate_password_hash(initial_password),
             'role': 'SUPER_ADMIN',
             'empleado_id': None,
-            'org_id': 'default',
+            'org_id': 'cibercom',
         })
 
         if env_password:
@@ -158,6 +196,7 @@ from api.reclutamiento.routes          import setup_reclutamiento_routes
 from api.desempeno.routes              import setup_desempeno_routes
 from api.analitica.routes              import setup_analitica_routes
 from api.catalogos.catalogos          import setup_catalogos_routes
+from api.conexiones_externas.routes    import setup_conexiones_externas_routes
 
 setup_login_routes(app, mongo)
 setup_usuario_routes(app, mongo)
@@ -187,6 +226,7 @@ setup_reclutamiento_routes(app, mongo)
 setup_desempeno_routes(app, mongo)
 setup_analitica_routes(app, mongo)
 setup_catalogos_routes(app)
+setup_conexiones_externas_routes(app, mongo)
 
 
 @app.errorhandler(404)

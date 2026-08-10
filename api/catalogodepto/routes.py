@@ -12,7 +12,7 @@ def setup_catalogodepto_routes(app, mongo):
         error = require_fields(data, 'NombreDepto', 'Descripcion', 'Poblacion')
         if error:
             return error
-        return create_catalogodepto(mongo, data['NombreDepto'], data['Descripcion'], data['Poblacion'])
+        return create_catalogodepto(mongo, data['NombreDepto'], data['Descripcion'], data['Poblacion'], data.get('DeptoPadre'))
 
     @app.route('/catalogodepto', methods=['GET'])
     @require_roles('EMPLOYEE', 'ADMIN', 'SUPER_ADMIN')
@@ -36,4 +36,4 @@ def setup_catalogodepto_routes(app, mongo):
         error = require_fields(data, 'NombreDepto', 'Descripcion', 'Poblacion')
         if error:
             return error
-        return update_catalogodepto(mongo, _id, data['NombreDepto'], data['Descripcion'], data['Poblacion'])
+        return update_catalogodepto(mongo, _id, data['NombreDepto'], data['Descripcion'], data['Poblacion'], data.get('DeptoPadre'))

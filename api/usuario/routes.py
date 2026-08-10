@@ -1,4 +1,5 @@
 from flask import request, jsonify
+from flask_jwt_extended import get_jwt
 from .logic import (create_usuario, get_usuarios, get_usuario,
                     delete_usuario, update_usuario, usuario_existente)
 import logging
@@ -57,7 +58,7 @@ def setup_usuario_routes(app, mongo):
         role                 = data.get('role')
         areas_administradas  = data.get('areas_administradas')
         return update_usuario(mongo, id, user, password, role,
-                               areas_administradas=areas_administradas)
+                               areas_administradas=areas_administradas, identity=get_jwt())
 
     @app.route('/usuario/<id>', methods=['DELETE'])
     @require_roles('SUPER_ADMIN')

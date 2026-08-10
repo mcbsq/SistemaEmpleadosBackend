@@ -30,22 +30,61 @@ def _admin_headers() -> dict:
     s = get_aegis_settings()
     return {
         "X-Tenant-Id": s["tenant_id"],
+        "X-App-Id": s["app_id"],
         "Authorization": f"ApiKey {s['api_key']}",
         "Content-Type": "application/json",
     }
 
 
-def aegis_password_login(identifier: str, password: str) -> Tuple[Optional[dict], Optional[Tuple[dict, int]]]:
+def aegis_resolve_tenant(identifier: str, app: str) -> Tuple[Optional[dict], Optional[Tuple[Any, int]]]:
     """
-    Valida credenciales contra Aegis (mismo contrato que el front podría usar directo).
+    Aegis ahora es multi-tenant: un mismo `identifier` puede existir en
+    varios tenants, así que el tenant ya no se puede fijar por configuración
+    estática. POST /v1/auth/resolve-tenant averigua a qué tenant pertenece
+    este identifier para la app dada, ANTES de intentar login.
+    Retorna ({"tenant_key","tenant_name","app_key","identifier_kind"}, None) si hay
+    coincidencia única. Si falla: (None, (body, 404)) sin cuenta para esa app,
+    o (None, (body, 409)) si el identifier existe en más de un tenant (Aegis
+    aún no expone la lista de candidatos — el caller debe pedir aclaración).
+    """
+    s = get_aegis_settings()
+    url = f"{s['base_url']}/v1/auth/resolve-tenant"
+    try:
+        r = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={"identifier": identifier.strip(), "app": app},
+            timeout=s["timeout"],
+        )
+    except requests.RequestException as e:
+        logger.error("Aegis resolve-tenant: error de red: %s", e)
+        return None, ({"error": "Servicio de autenticación no disponible"}, 503)
+
+    if r.status_code == 200:
+        return r.json(), None
+
+    try:
+        err_body = r.json()
+    except Exception:
+        err_body = {"detail": r.text or r.reason}
+    return None, (err_body, r.status_code)
+
+
+def aegis_password_login(
+    identifier: str, password: str, tenant_id: Optional[str] = None, app_id: Optional[str] = None
+) -> Tuple[Optional[dict], Optional[Tuple[dict, int]]]:
+    """
+    Valida credenciales contra Aegis. `tenant_id`/`app_id` permiten pasar el
+    par resuelto dinámicamente vía resolve-tenant; si se omiten, cae en la
+    configuración estática (compatibilidad con el tenant/app legacy).
     Retorna (tokens, None) si OK; si falla, (None, (cuerpo_error, código_http))
     para que login/logic decida mensaje al cliente o fallback legacy.
     """
     s = get_aegis_settings()
     url = f"{s['base_url']}/v1/auth/login"
     headers = {
-        "X-Tenant-Id": s["tenant_id"],
-        "X-App-Id": s["app_id"],
+        "X-Tenant-Id": tenant_id or s["tenant_id"],
+        "X-App-Id": app_id or s["app_id"],
         "Content-Type": "application/json",
     }
     try:
@@ -69,15 +108,22 @@ def aegis_password_login(identifier: str, password: str) -> Tuple[Optional[dict]
     return None, (err_body, r.status_code)
 
 
-def aegis_get_me(access_token: str) -> Tuple[Optional[dict], Optional[Tuple[Any, int]]]:
+def aegis_get_me(access_token: str, tenant_id: Optional[str] = None, app_id: Optional[str] = None) -> Tuple[Optional[dict], Optional[Tuple[Any, int]]]:
     """
     Obtiene id y email canónico del usuario autenticado en Aegis.
     Sirve para enlazar con la colección Mongo `usuario` (aegis_user_id / email / user).
+    Debe usar el MISMO tenant/app con el que se hizo login (si se resolvió
+    dinámicamente), de lo contrario Aegis no reconoce la sesión.
     """
     s = get_aegis_settings()
     url = f"{s['base_url']}/v1/me"
+    headers = _auth_headers(access_token)
+    if tenant_id:
+        headers["X-Tenant-Id"] = tenant_id
+    if app_id:
+        headers["X-App-Id"] = app_id
     try:
-        r = requests.get(url, headers=_auth_headers(access_token), timeout=s["timeout"])
+        r = requests.get(url, headers=headers, timeout=s["timeout"])
     except requests.RequestException as e:
         logger.error("Aegis /v1/me: error de red: %s", e)
         return None, ({"error": "Servicio de autenticación no disponible"}, 503)
@@ -92,12 +138,17 @@ def aegis_get_me(access_token: str) -> Tuple[Optional[dict], Optional[Tuple[Any,
     return None, (err_body, r.status_code)
 
 
-def aegis_admin_create_user(email: str) -> Tuple[Optional[dict], Optional[Tuple[Any, int]]]:
+def aegis_admin_create_user(email: str, role: str = "empleado") -> Tuple[Optional[dict], Optional[Tuple[Any, int]]]:
     """
     Crea la identidad en Aegis antes (o en paralelo) de insertar en Mongo en POST /usuario.
     Aegis ya no acepta contraseña elegida por el admin: genera una temporal
     (retornada aquí como `temp_password`) que el usuario debe cambiar en su
     primer inicio de sesión.
+    IMPORTANTE: sin `app_permissions` la cuenta se crea pero queda sin acceso
+    a la app "empleados" — resolve-tenant no la encuentra y el login falla
+    silenciosamente (este fue el bug reportado: "doy de alta en RH y no puede
+    entrar"). `role` son permisos de negocio libres (cualquier string), no un
+    catálogo fijo de Aegis — aquí se usa "admin" o "empleado".
     Retorna ({"id", "temp_password", "user"}, None) si OK.
     """
     s = get_aegis_settings()
@@ -111,6 +162,9 @@ def aegis_admin_create_user(email: str) -> Tuple[Optional[dict], Optional[Tuple[
         "must_change_password": True,
         "temp_password_mode": "generate",
         "return_temp_password": True,
+        "app_permissions": {
+            s["app_id"]: {"scopes": ["users:read"], "roles": [role]},
+        },
     }
     try:
         r = requests.post(url, headers=_admin_headers(), json=payload, timeout=s["timeout"])
