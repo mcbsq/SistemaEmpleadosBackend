@@ -116,6 +116,31 @@ def create_empleado(mongo, identity=None):
 
 
 # --- GET TODOS ---
+def _empleado_ids_super_admin(mongo):
+    """
+    IDs de empleado vinculados a una cuenta SUPER_ADMIN. Un SUPER_ADMIN es una
+    cuenta administrativa de la empresa (o de Cibercom), no una persona en la
+    plantilla — no debe aparecer en el Organigrama ni ser dado de alta en la
+    tabla de RH. create_usuario/update_usuario ya evitan que se les asigne un
+    empleado_id de entrada; este filtro es la segunda barrera (defensa en
+    profundidad) para datos existentes que hayan quedado vinculados antes de
+    esa regla, o por cualquier otra vía.
+    """
+    # empleado_id vive inconsistentemente en Mongo: unas veces ObjectId, otras
+    # string (dato legacy, ver diccionario de datos) — normalizar a ObjectId
+    # aquí, o el $nin de abajo nunca hace match contra empleados._id real.
+    ids = []
+    for u in mongo.db.usuario.find({"role": "SUPER_ADMIN"}):
+        raw = u.get("empleado_id")
+        if not raw:
+            continue
+        try:
+            ids.append(raw if isinstance(raw, ObjectId) else ObjectId(raw))
+        except (InvalidId, TypeError):
+            ids.append(raw)  # dejar tal cual si de plano no es un ObjectId válido
+    return ids
+
+
 def get_empleados(mongo, identity=None):
     try:
         query = {"estado": {"$ne": "pendiente"}}
@@ -134,6 +159,15 @@ def get_empleados(mongo, identity=None):
             query["_id"] = {"$in": equipo} if equipo else {"$in": []}
         # CONTADOR, PROJECT_MANAGER y MEDICO ven la nómina completa: la
         # analítica financiera, de proyectos y clínica opera a nivel empresa.
+
+        excluir_ids = _empleado_ids_super_admin(mongo)
+        if excluir_ids:
+            id_actual = query.get("_id")
+            if isinstance(id_actual, dict) and "$in" in id_actual:
+                # JEFE_AREA: intersectar en vez de pisar el filtro existente.
+                id_actual["$in"] = [i for i in id_actual["$in"] if i not in excluir_ids]
+            else:
+                query["_id"] = {"$nin": excluir_ids}
 
         empleados = list(mongo.db.empleados.find(query))
         formatted = []

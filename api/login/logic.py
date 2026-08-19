@@ -21,6 +21,7 @@ from core.aegis_config import get_aegis_settings
 from core.aegis_client import aegis_password_login, aegis_get_me, aegis_change_password, aegis_resolve_tenant
 from core.permissions import PERMISOS_DEFAULT, DASHBOARD_MODULOS, get_permisos_for_role
 from core.fechas_especiales import verificar_fechas_especiales
+from api.tenants.logic import registrar_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,12 @@ def login(mongo, identifier, password):
                         "Auto-aprovisionado primer SUPER_ADMIN de tenant nuevo '%s': %s",
                         tenant_id, usuario["user"],
                     )
+                    # Mismo momento en que "nace" la empresa: registrarla en
+                    # el catálogo central para que Cibercom la vea (ver
+                    # api/tenants/logic.py). resolved trae tenant_name porque
+                    # solo se llega aquí cuando resolve-tenant sí encontró un
+                    # tenant real (tenant_id != settings["tenant_id"]).
+                    registrar_tenant(mongo, tenant_id, nombre=(resolved or {}).get("tenant_name"))
                 else:
                     logger.warning(
                         "Login Aegis OK pero sin fila en Mongo (tenant=%s id=%s email=%s)",

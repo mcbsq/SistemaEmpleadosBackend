@@ -22,3 +22,6 @@ venv.bak/
 # --- DB & Logs ---
 *.log
 *.sqlite
+# Metadatos de macOS al trabajar desde un volumen externo/SMB
+._*
+.DS_Store

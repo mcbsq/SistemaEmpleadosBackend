@@ -11,6 +11,8 @@
 from flask import jsonify
 import logging
 
+from core.aegis_config import get_aegis_settings
+
 logger = logging.getLogger(__name__)
 
 # Tabla de vacaciones por antigüedad — art. 76 LFT (México) como default
@@ -80,6 +82,18 @@ def get_config(mongo, org_id):
         config = _merge_deep(DEFAULT_CONFIG, doc or {})
         config["org_id"] = org_id
         config.pop("_id", None)
+        # Existencia real del tenant: usada por la pantalla de login por URL
+        # (/<org_id>) para distinguir "empresa real, branding por default
+        # porque aún no personalizó nada" de "org_id inventado en la URL que
+        # nunca se ha logueado nadie". El tenant propio de Cibercom siempre
+        # existe (es el original, nunca pasó por el auto-provisioning nuevo).
+        # Se usa mongo.db.raw porque esta ruta es pública (sin g.org_id) y la
+        # pregunta es deliberadamente sobre CUALQUIER tenant, no el propio.
+        tenant_cibercom = get_aegis_settings()["tenant_id"] or "cibercom"
+        config["existe"] = (
+            org_id == tenant_cibercom
+            or mongo.db.raw.usuario.count_documents({"org_id": org_id}) > 0
+        )
         return jsonify(config), 200
     except Exception as e:
         logger.error(f"Error obteniendo config de organización: {e}")

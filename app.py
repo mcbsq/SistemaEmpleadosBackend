@@ -197,6 +197,7 @@ from api.desempeno.routes              import setup_desempeno_routes
 from api.analitica.routes              import setup_analitica_routes
 from api.catalogos.catalogos          import setup_catalogos_routes
 from api.conexiones_externas.routes    import setup_conexiones_externas_routes
+from api.tenants.routes                import setup_tenants_routes
 
 setup_login_routes(app, mongo)
 setup_usuario_routes(app, mongo)
@@ -227,6 +228,7 @@ setup_desempeno_routes(app, mongo)
 setup_analitica_routes(app, mongo)
 setup_catalogos_routes(app)
 setup_conexiones_externas_routes(app, mongo)
+setup_tenants_routes(app, mongo)
 
 
 @app.errorhandler(404)

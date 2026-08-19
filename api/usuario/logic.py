@@ -84,6 +84,15 @@ def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE', email=No
                 eid = empleado_id
                 logging.warning("empleado_id '%s' no es un ObjectId válido.", empleado_id)
 
+        # SUPER_ADMIN es una cuenta administrativa (de la empresa o de
+        # Cibercom), no una persona en la plantilla: nunca debe quedar
+        # vinculada a un empleado, o aparecería en el Organigrama y sería
+        # dable de alta en RH como si fuera personal real. Se ignora
+        # silenciosamente cualquier empleado_id que venga en la petición.
+        if role == 'SUPER_ADMIN' and eid is not None:
+            logging.info("empleado_id ignorado al crear usuario SUPER_ADMIN '%s' (no aplica).", user.strip())
+            eid = None
+
         temp_password = None
         if s["admin_enabled"]:
             # Primero identidad en Aegis; si falla, no insertamos en Mongo (evita usuarios huérfanos).
@@ -207,6 +216,12 @@ def update_usuario(mongo, id, user=None, password=None, role=None, areas_adminis
         elif role and role != 'ADMIN' and doc.get('areas_administradas'):
             # Si se le quita el rol ADMIN a alguien, no tiene sentido dejarle áreas asignadas.
             update['areas_administradas'] = []
+
+        # Misma regla que en el alta: SUPER_ADMIN nunca queda vinculado a un
+        # empleado. Cubre tanto "se le sube el rol a SUPER_ADMIN" como datos
+        # legacy que hayan quedado vinculados antes de esta regla.
+        if efectivo_role == 'SUPER_ADMIN' and doc.get('empleado_id'):
+            update['empleado_id'] = None
 
         temp_password = None
         if password:

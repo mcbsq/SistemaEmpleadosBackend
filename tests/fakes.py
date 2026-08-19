@@ -9,7 +9,21 @@ from bson.objectid import ObjectId
 
 def _matches(doc, filtro):
     for k, v in (filtro or {}).items():
-        if doc.get(k) != v:
+        actual = doc.get(k)
+        if isinstance(v, dict) and any(str(op).startswith("$") for op in v):
+            for op, opval in v.items():
+                if op == "$ne":
+                    if actual == opval:
+                        return False
+                elif op == "$in":
+                    if actual not in opval:
+                        return False
+                elif op == "$nin":
+                    if actual in opval:
+                        return False
+                else:
+                    raise NotImplementedError(f"FakeCollection no soporta el operador {op}")
+        elif actual != v:
             return False
     return True
 
