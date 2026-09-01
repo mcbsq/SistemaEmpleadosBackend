@@ -25,3 +25,4 @@ venv.bak/
 # Metadatos de macOS al trabajar desde un volumen externo/SMB
 ._*
 .DS_Store
+.worktrees/
