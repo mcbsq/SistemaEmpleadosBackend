@@ -128,6 +128,10 @@ class FakeDB:
     def __init__(self):
         self._colecciones = {}
 
+    @property
+    def raw(self):
+        return self
+
     def __getattr__(self, nombre):
         if nombre not in self._colecciones:
             self._colecciones[nombre] = FakeCollection()
