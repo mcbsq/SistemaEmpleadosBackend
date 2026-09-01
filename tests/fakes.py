@@ -21,6 +21,9 @@ def _matches(doc, filtro):
                 elif op == "$nin":
                     if actual in opval:
                         return False
+                elif op == "$exists":
+                    if (k in doc) is not bool(opval):
+                        return False
                 else:
                     raise NotImplementedError(f"FakeCollection no soporta el operador {op}")
         elif actual != v:
@@ -100,6 +103,19 @@ class FakeCollection:
                 del self._docs[_id]
                 return type("Result", (), {"deleted_count": 1})()
         return type("Result", (), {"deleted_count": 0})()
+
+    def update_many(self, filtro, update):
+        matched = 0
+        modified = 0
+        for doc in self._docs.values():
+            if not _matches(doc, filtro):
+                continue
+            matched += 1
+            before = dict(doc)
+            doc.update(update.get("$set", {}))
+            if doc != before:
+                modified += 1
+        return type("Result", (), {"matched_count": matched, "modified_count": modified})()
 
     def count_documents(self, filtro=None):
         return len([d for d in self._docs.values() if _matches(d, filtro)])
