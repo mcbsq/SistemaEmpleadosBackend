@@ -1,10 +1,15 @@
 # api/tenants/routes.py
 from functools import wraps
-from flask import jsonify
+import os
+
+from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt
 
 from .logic import listar_tenants
+from .registration import register_tenant, slug_availability
 from core.aegis_config import get_aegis_settings
+from core.public_rate_limit import RegistrationRateLimiter
+from core.tenant_provisioning import UnavailableTenantProvisioner
 
 
 def _require_operador_cibercom(f):
@@ -35,6 +40,29 @@ def _require_operador_cibercom(f):
 
 
 def setup_tenants_routes(app, mongo):
+
+    app.config.setdefault(
+        "PUBLIC_REGISTRATION_ENABLED",
+        os.environ.get("PUBLIC_REGISTRATION_ENABLED", "false").lower() == "true",
+    )
+    app.config.setdefault("REGISTRATION_RATE_LIMITER", RegistrationRateLimiter())
+
+    @app.route('/public/tenants/slug-availability', methods=['GET'])
+    def slug_availability_route():
+        return jsonify(slug_availability(mongo, request.args.get("slug", ""))), 200
+
+    @app.route('/public/tenants/register', methods=['POST'])
+    def register_tenant_route():
+        if not app.config["PUBLIC_REGISTRATION_ENABLED"]:
+            return jsonify({"error": "registration_disabled"}), 503
+        if not app.config["REGISTRATION_RATE_LIMITER"].allow(request.remote_addr or "unknown"):
+            return jsonify({"error": "rate_limited"}), 429
+        body, status = register_tenant(
+            mongo,
+            request.get_json(silent=True) or {},
+            app.config.get("TENANT_PROVISIONER") or UnavailableTenantProvisioner(),
+        )
+        return jsonify(body), status
 
     # Registro central de empresas — solo Cibercom (SUPER_ADMIN del tenant
     # propio de Cibercom) puede ver qué empresas existen en el sistema.

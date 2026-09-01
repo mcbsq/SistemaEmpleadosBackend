@@ -21,6 +21,9 @@ def _matches(doc, filtro):
                 elif op == "$nin":
                     if actual in opval:
                         return False
+                elif op == "$exists":
+                    if (k in doc) is not bool(opval):
+                        return False
                 else:
                     raise NotImplementedError(f"FakeCollection no soporta el operador {op}")
         elif actual != v:
@@ -57,7 +60,7 @@ class FakeCollection:
     def find(self, filtro=None):
         return FakeCursor(dict(d) for d in self._docs.values() if _matches(d, filtro))
 
-    def update_one(self, filtro, update):
+    def update_one(self, filtro, update, upsert=False):
         for doc in self._docs.values():
             if _matches(doc, filtro):
                 if "$set" in update:
@@ -66,6 +69,32 @@ class FakeCollection:
                     for k, v in update["$inc"].items():
                         doc[k] = doc.get(k, 0) + v
                 return type("Result", (), {"matched_count": 1, "modified_count": 1})()
+        if upsert:
+            doc = dict(filtro)
+            doc.update(update.get("$setOnInsert", {}))
+            doc.update(update.get("$set", {}))
+            result = self.insert_one(doc)
+            return type("Result", (), {
+                "matched_count": 0,
+                "modified_count": 0,
+                "upserted_id": result.inserted_id,
+            })()
+        return type("Result", (), {"matched_count": 0, "modified_count": 0})()
+
+    def replace_one(self, filtro, replacement, upsert=False):
+        for _id, doc in self._docs.items():
+            if _matches(doc, filtro):
+                replacement = dict(replacement)
+                replacement.setdefault("_id", _id)
+                self._docs[_id] = replacement
+                return type("Result", (), {"matched_count": 1, "modified_count": 1})()
+        if upsert:
+            result = self.insert_one(replacement)
+            return type("Result", (), {
+                "matched_count": 0,
+                "modified_count": 0,
+                "upserted_id": result.inserted_id,
+            })()
         return type("Result", (), {"matched_count": 0, "modified_count": 0})()
 
     def delete_one(self, filtro):
@@ -74,6 +103,19 @@ class FakeCollection:
                 del self._docs[_id]
                 return type("Result", (), {"deleted_count": 1})()
         return type("Result", (), {"deleted_count": 0})()
+
+    def update_many(self, filtro, update):
+        matched = 0
+        modified = 0
+        for doc in self._docs.values():
+            if not _matches(doc, filtro):
+                continue
+            matched += 1
+            before = dict(doc)
+            doc.update(update.get("$set", {}))
+            if doc != before:
+                modified += 1
+        return type("Result", (), {"matched_count": matched, "modified_count": modified})()
 
     def count_documents(self, filtro=None):
         return len([d for d in self._docs.values() if _matches(d, filtro)])
@@ -85,6 +127,10 @@ class FakeDB:
     Flask real, así que core/tenant_db.py no aplica aquí de todas formas)."""
     def __init__(self):
         self._colecciones = {}
+
+    @property
+    def raw(self):
+        return self
 
     def __getattr__(self, nombre):
         if nombre not in self._colecciones:
