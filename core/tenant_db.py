@@ -46,14 +46,14 @@ class _ColeccionMultiTenant:
     def _filtro(self, filtro):
         org_id = _org_id_actual()
         filtro = dict(filtro) if filtro else {}
-        if org_id is not None and "org_id" not in filtro:
+        if org_id is not None:
             filtro["org_id"] = org_id
         return filtro
 
     def _doc_con_org(self, documento):
         documento = dict(documento) if documento else {}
         org_id = _org_id_actual()
-        if org_id is not None and "org_id" not in documento:
+        if org_id is not None:
             documento["org_id"] = org_id
         return documento
 
@@ -63,7 +63,7 @@ class _ColeccionMultiTenant:
             if org_id is not None:
                 update = dict(update)
                 set_on_insert = dict(update.get("$setOnInsert", {}))
-                set_on_insert.setdefault("org_id", org_id)
+                set_on_insert["org_id"] = org_id
                 update["$setOnInsert"] = set_on_insert
         return update
 

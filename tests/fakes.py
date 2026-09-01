@@ -57,7 +57,7 @@ class FakeCollection:
     def find(self, filtro=None):
         return FakeCursor(dict(d) for d in self._docs.values() if _matches(d, filtro))
 
-    def update_one(self, filtro, update):
+    def update_one(self, filtro, update, upsert=False):
         for doc in self._docs.values():
             if _matches(doc, filtro):
                 if "$set" in update:
@@ -66,6 +66,32 @@ class FakeCollection:
                     for k, v in update["$inc"].items():
                         doc[k] = doc.get(k, 0) + v
                 return type("Result", (), {"matched_count": 1, "modified_count": 1})()
+        if upsert:
+            doc = dict(filtro)
+            doc.update(update.get("$setOnInsert", {}))
+            doc.update(update.get("$set", {}))
+            result = self.insert_one(doc)
+            return type("Result", (), {
+                "matched_count": 0,
+                "modified_count": 0,
+                "upserted_id": result.inserted_id,
+            })()
+        return type("Result", (), {"matched_count": 0, "modified_count": 0})()
+
+    def replace_one(self, filtro, replacement, upsert=False):
+        for _id, doc in self._docs.items():
+            if _matches(doc, filtro):
+                replacement = dict(replacement)
+                replacement.setdefault("_id", _id)
+                self._docs[_id] = replacement
+                return type("Result", (), {"matched_count": 1, "modified_count": 1})()
+        if upsert:
+            result = self.insert_one(replacement)
+            return type("Result", (), {
+                "matched_count": 0,
+                "modified_count": 0,
+                "upserted_id": result.inserted_id,
+            })()
         return type("Result", (), {"matched_count": 0, "modified_count": 0})()
 
     def delete_one(self, filtro):
