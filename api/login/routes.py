@@ -18,7 +18,7 @@ def setup_login_routes(app, mongo):
             logging.debug(f"Intento de login recibido para usuario: {user}")
 
             # Llamar a la función de login
-            return login(mongo, user, password)
+            return login(mongo, user, password, requested_org_id=data.get('org_id'))
 
         except Exception as e:
             # Log del error

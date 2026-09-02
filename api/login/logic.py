@@ -136,7 +136,7 @@ def _login_legacy(mongo, user, password):
     return _issue_token_response(mongo, usuario, user)
 
 
-def login(mongo, identifier, password):
+def login(mongo, identifier, password, requested_org_id=None):
     """
     Punto único de entrada del login HTTP.
     `identifier` = lo que Aegis espera (email completo o parte local); la ruta
@@ -156,18 +156,26 @@ def login(mongo, identifier, password):
             # las cuentas antes de este cambio — así ninguna cuenta existente
             # se rompe mientras se completa la migración.
             tenant_id, app_id = settings["tenant_id"], settings["app_id"]
-            resolved, resolve_err = aegis_resolve_tenant(identifier, settings["app_id"])
-            if resolved:
-                tenant_id, app_id = resolved["tenant_key"], resolved["app_key"]
-            elif resolve_err and resolve_err[1] == 409:
-                logger.warning("Aegis resolve-tenant ambiguo para identifier=%s", identifier[:3] + "...")
-                return jsonify({
-                    "error": "Tu cuenta pertenece a más de una empresa. Contacta a soporte para continuar.",
-                }), 409
+            resolved = None
+            requested_org_id = (requested_org_id or "").strip().lower()
+            if requested_org_id:
+                # La entrada /<empresa> desambigua correos que pertenecen a
+                # varios tenants. Aegis sigue siendo quien valida que las
+                # credenciales realmente correspondan a ese tenant.
+                tenant_id, app_id = requested_org_id, settings["app_id"]
             else:
-                # 404 (u otro): probablemente cuenta legacy sin app_permissions
-                # nuevas — se reintenta con el par estático de antes.
-                tenant_id, app_id = settings["tenant_id"], settings["legacy_app_id"]
+                resolved, resolve_err = aegis_resolve_tenant(identifier, settings["app_id"])
+                if resolved:
+                    tenant_id, app_id = resolved["tenant_key"], resolved["app_key"]
+                elif resolve_err and resolve_err[1] == 409:
+                    logger.warning("Aegis resolve-tenant ambiguo para identifier=%s", identifier[:3] + "...")
+                    return jsonify({
+                        "error": "Tu cuenta pertenece a más de una empresa. Usa la liga específica de tu empresa.",
+                    }), 409
+                else:
+                    # 404 (u otro): probablemente cuenta legacy sin app_permissions
+                    # nuevas — se reintenta con el par estático de antes.
+                    tenant_id, app_id = settings["tenant_id"], settings["legacy_app_id"]
 
             # 1) Autenticar contra Aegis (contraseña vive allí).
             tokens, err = aegis_password_login(identifier, password, tenant_id=tenant_id, app_id=app_id)

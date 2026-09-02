@@ -1,6 +1,7 @@
 from flask import Flask, g
 
 from api.org.logic import get_config
+from api.login.logic import login
 from api.tenants.logic import crear_tenant_manual, enviar_acceso_tenant_manual
 from api.usuario.logic import create_usuario
 from core.mailer import build_tenant_login_url, send_temp_password_email
@@ -154,3 +155,31 @@ def test_operator_can_email_first_admin_credentials_without_storing_password(mon
     assert body["email_sent"] is True
     assert delivered["login_url"].endswith("/mi-empresa")
     assert "temp_password" not in mongo.db.raw.tenants.find_one({"org_id": "mi-empresa"})
+
+
+def test_slug_login_bypasses_ambiguous_email_resolution(monkeypatch):
+    calls = {}
+    monkeypatch.setattr("api.login.logic.get_aegis_settings", lambda: {
+        "login_enabled": True, "tenant_id": "cibercom", "app_id": "empleados",
+        "legacy_app_id": "principal", "legacy_fallback": False,
+    })
+    monkeypatch.setattr(
+        "api.login.logic.aegis_resolve_tenant",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("no debe resolver por correo")),
+    )
+    def reject_login(identifier, password, tenant_id=None, app_id=None):
+        calls.update(identifier=identifier, tenant_id=tenant_id, app_id=app_id)
+        return None, ({"error": "invalid"}, 401)
+    monkeypatch.setattr("api.login.logic.aegis_password_login", reject_login)
+
+    app = Flask(__name__)
+    with app.test_request_context():
+        response, status = login(
+            FakeMongo(), "admin@example.com", "incorrecta",
+            requested_org_id="mi-empresa",
+        )
+
+    assert status == 401
+    assert calls == {
+        "identifier": "admin@example.com", "tenant_id": "mi-empresa", "app_id": "empleados",
+    }
