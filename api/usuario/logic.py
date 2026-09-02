@@ -11,7 +11,7 @@
 # asignarla (ver api/usuario/routes.py). Viaja embebida en el JWT al hacer
 # login — ver api/login/logic.py.
 
-from flask import jsonify
+from flask import g, jsonify
 from bson.objectid import ObjectId
 from bson.errors import InvalidId
 from werkzeug.security import generate_password_hash
@@ -20,7 +20,7 @@ import logging
 from core.aegis_config import get_aegis_settings
 from core.aegis_client import (aegis_admin_create_user, aegis_admin_reset_password,
                                aegis_admin_list_users, aegis_admin_set_active)
-from core.mailer import send_temp_password_email
+from core.mailer import build_tenant_login_url, send_temp_password_email
 from core.audit import registrar_auditoria
 
 
@@ -142,12 +142,15 @@ def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE', email=No
             # La contraseña la generó Aegis. Si hay SMTP configurado se envía
             # al correo del empleado; si no (o si falla), se devuelve en la
             # respuesta para que el admin la entregue en mano.
-            if send_temp_password_email(email_clean, user.strip(), temp_password):
+            login_url = build_tenant_login_url(getattr(g, "org_id", None))
+            if send_temp_password_email(email_clean, user.strip(), temp_password, login_url=login_url):
                 respuesta['email_sent'] = True
+                respuesta['login_url'] = login_url
                 respuesta['message'] = (f'Usuario creado. La contraseña temporal se envió a '
                                         f'{email_clean}; deberá cambiarla al iniciar sesión.')
             else:
                 respuesta['temp_password'] = temp_password
+                respuesta['login_url'] = login_url
                 respuesta['message'] = ('Usuario creado. Entrega la contraseña temporal '
                                         'al empleado; deberá cambiarla al iniciar sesión.')
         return jsonify(respuesta), 201
@@ -256,11 +259,16 @@ def update_usuario(mongo, id, user=None, password=None, role=None, areas_adminis
             registrar_auditoria(mongo, actor, actor_role, "update", "usuario", id,
                                  detalle=f"Contraseña restablecida para {doc.get('user','')} (sin registrar el valor)")
             destino = doc.get('email')
-            if destino and send_temp_password_email(destino, doc.get('user', ''), temp_password):
+            login_url = build_tenant_login_url(getattr(g, "org_id", None))
+            if destino and send_temp_password_email(
+                destino, doc.get('user', ''), temp_password, login_url=login_url
+            ):
                 respuesta['email_sent'] = True
+                respuesta['login_url'] = login_url
                 respuesta['message'] = f'Contraseña temporal generada y enviada a {destino}.'
             else:
                 respuesta['temp_password'] = temp_password
+                respuesta['login_url'] = login_url
                 respuesta['message'] = ('Contraseña temporal generada. Entrégala al empleado; '
                                         'deberá cambiarla al iniciar sesión.')
         return jsonify(respuesta), 200

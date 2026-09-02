@@ -5,7 +5,7 @@ import os
 from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt
 
-from .logic import listar_tenants
+from .logic import crear_tenant_manual, enviar_acceso_tenant_manual, listar_tenants
 from .registration import register_tenant, slug_availability
 from core.aegis_config import get_aegis_settings
 from core.public_rate_limit import RegistrationRateLimiter
@@ -70,3 +70,17 @@ def setup_tenants_routes(app, mongo):
     @_require_operador_cibercom
     def listar_tenants_route():
         return jsonify(listar_tenants(mongo)), 200
+
+    @app.route('/admin/tenants', methods=['POST'])
+    @_require_operador_cibercom
+    def crear_tenant_manual_route():
+        body, status = crear_tenant_manual(mongo, request.get_json(silent=True) or {})
+        return jsonify(body), status
+
+    @app.route('/admin/tenants/<org_id>/deliver-access', methods=['POST'])
+    @_require_operador_cibercom
+    def enviar_acceso_tenant_manual_route(org_id):
+        body, status = enviar_acceso_tenant_manual(
+            mongo, org_id, request.get_json(silent=True) or {},
+        )
+        return jsonify(body), status

@@ -31,7 +31,19 @@ def mailer_enabled() -> bool:
     return bool((os.environ.get("SMTP_HOST") or "").strip())
 
 
-def send_temp_password_email(to_email: str, login_user: str, temp_password: str) -> bool:
+def build_tenant_login_url(org_id: str = None) -> str:
+    """Construye la liga pública sin fijar el dominio en el código."""
+    origin = (os.environ.get("PUBLIC_APP_URL") or "https://cibercomrh.com").strip().rstrip("/")
+    slug = (org_id or "").strip().strip("/")
+    return f"{origin}/{slug}" if slug else f"{origin}/Login"
+
+
+def send_temp_password_email(
+    to_email: str,
+    login_user: str,
+    temp_password: str,
+    login_url: str = None,
+) -> bool:
     """
     Envía la contraseña temporal al correo del usuario recién creado/reseteado.
     Retorna True si el correo salió; False si el envío está deshabilitado o
@@ -52,11 +64,13 @@ def send_temp_password_email(to_email: str, login_user: str, temp_password: str)
     msg["Subject"] = "Tu acceso a CibercomHR — contraseña temporal"
     msg["From"] = sender
     msg["To"] = to_email
+    access_url = login_url or build_tenant_login_url()
     msg.set_content(
         f"Hola,\n\n"
         f"Se creó tu cuenta de acceso al sistema de empleados de Cibercom.\n\n"
         f"  Usuario:              {login_user}\n"
         f"  Contraseña temporal:  {temp_password}\n\n"
+        f"  Liga de acceso:        {access_url}\n\n"
         f"Al iniciar sesión por primera vez el sistema te pedirá definir tu\n"
         f"contraseña definitiva (mínimo 12 caracteres).\n\n"
         f"Si no esperabas este correo, repórtalo a tu administrador de TI.\n"

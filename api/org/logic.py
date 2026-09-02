@@ -90,8 +90,14 @@ def get_config(mongo, org_id):
         # Se usa mongo.db.raw porque esta ruta es pública (sin g.org_id) y la
         # pregunta es deliberadamente sobre CUALQUIER tenant, no el propio.
         tenant_cibercom = get_aegis_settings()["tenant_id"] or "cibercom"
+        tenant = mongo.db.raw.tenants.find_one({"org_id": org_id})
+        tenant_activo = bool(
+            tenant and str(tenant.get("estado", "")).strip().lower() in {"active", "activo"}
+        )
         config["existe"] = (
             org_id == tenant_cibercom
+            or tenant_activo
+            # Compatibilidad con empresas históricas creadas antes del catálogo.
             or mongo.db.raw.usuario.count_documents({"org_id": org_id}) > 0
         )
         return jsonify(config), 200

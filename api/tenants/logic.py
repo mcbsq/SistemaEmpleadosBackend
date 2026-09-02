@@ -17,7 +17,78 @@
 from datetime import datetime, timezone
 import logging
 
+from api.tenants.registration import RESERVED_SLUGS, normalize_slug
+from core.mailer import build_tenant_login_url, send_temp_password_email
+
 logger = logging.getLogger(__name__)
+
+
+def crear_tenant_manual(mongo, payload):
+    """Prepara un espacio vacío antes de crear su identidad administradora en Aegis."""
+    nombre = (payload.get("nombre") or "").strip()
+    org_id = normalize_slug(payload.get("org_id"))
+    contacto_nombre = (payload.get("contacto_nombre") or "").strip()
+    contacto_email = (payload.get("contacto_email") or "").strip().lower()
+
+    if (
+        not nombre or not contacto_nombre or "@" not in contacto_email
+        or not 3 <= len(org_id) <= 63 or org_id in RESERVED_SLUGS
+    ):
+        return {"error": "invalid_company"}, 400
+
+    raw = mongo.db.raw
+    if raw.tenants.find_one({"org_id": org_id}):
+        return {"error": "slug_unavailable"}, 409
+
+    now = datetime.now(timezone.utc).isoformat()
+    raw.organizacion.update_one(
+        {"org_id": org_id},
+        {"$setOnInsert": {"org_id": org_id, "name": nombre}},
+        upsert=True,
+    )
+    raw.tenants.insert_one({
+        "org_id": org_id,
+        "nombre": nombre,
+        "estado": "activo",
+        "fecha_alta": now,
+        "contacto_nombre": contacto_nombre,
+        "contacto_email": contacto_email,
+        "onboarding": "pendiente_primer_acceso",
+    })
+    return {
+        "org_id": org_id,
+        "nombre": nombre,
+        "estado": "activo",
+        "login_url": build_tenant_login_url(org_id),
+        "onboarding": "pendiente_primer_acceso",
+    }, 201
+
+
+def enviar_acceso_tenant_manual(mongo, org_id, payload):
+    """Entrega una contraseña generada en Aegis sin persistirla en Mongo."""
+    raw = mongo.db.raw
+    tenant = raw.tenants.find_one({"org_id": org_id})
+    if not tenant or str(tenant.get("estado", "")).lower() not in {"activo", "active"}:
+        return {"error": "tenant_not_found"}, 404
+
+    email = (payload.get("email") or tenant.get("contacto_email") or "").strip().lower()
+    usuario = (payload.get("usuario") or email).strip()
+    temp_password = payload.get("temp_password") or ""
+    if "@" not in email or not usuario or not temp_password:
+        return {"error": "invalid_credentials_delivery"}, 400
+
+    login_url = build_tenant_login_url(org_id)
+    if not send_temp_password_email(email, usuario, temp_password, login_url=login_url):
+        return {"error": "email_delivery_failed", "login_url": login_url}, 503
+
+    raw.tenants.update_one(
+        {"org_id": org_id},
+        {"$set": {
+            "onboarding": "credenciales_enviadas",
+            "credenciales_enviadas_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"email_sent": True, "email": email, "login_url": login_url}, 200
 
 
 def registrar_tenant(mongo, org_id: str, nombre: str = None):
