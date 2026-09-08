@@ -298,7 +298,7 @@ def change_password(mongo, jwt_claims, current_password, new_password):
             if err:
                 body, status = err
                 if status in (401, 403):
-                    return jsonify({"error": "La contraseña actual es incorrecta"}), 401
+                    return jsonify({"error": "La contraseña que escribiste no es correcta. Si es tu primer ingreso, usa la contraseña temporal que te llegó por correo."}), 401
                 logger.warning("Aegis change-password HTTP %s: %s", status, body)
                 if isinstance(body, dict) and body.get("detail"):
                     return jsonify({"error": body["detail"]}), status
@@ -308,7 +308,7 @@ def change_password(mongo, jwt_claims, current_password, new_password):
         # Modo legacy: hash en Mongo.
         stored = usuario.get("password")
         if not stored or not check_password_hash(stored, current_password):
-            return jsonify({"error": "La contraseña actual es incorrecta"}), 401
+            return jsonify({"error": "La contraseña que escribiste no es correcta. Si es tu primer ingreso, usa la contraseña temporal que te llegó por correo."}), 401
         if len(new_password) < 5:
             return jsonify({"error": "La nueva contraseña debe tener al menos 5 caracteres."}), 400
         from werkzeug.security import generate_password_hash

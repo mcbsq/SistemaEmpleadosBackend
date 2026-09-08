@@ -19,6 +19,11 @@ openpyxl==3.1.5
 et-xmlfile==2.0.0
 cryptography==50.0.0
 
+# ─── Servidor de producción (Docker) — app.py corre con el dev server de
+# Flask solo en local; en el contenedor lo sirve gunicorn (ver Dockerfile,
+# gunicorn_config.py) ────────────────────────────────────────────────────
+gunicorn==23.0.0
+
 # ─── Solo para pruebas (tests/) ────────────────────────────────────────────
 pytest==9.1.1
 requests-mock==1.12.1

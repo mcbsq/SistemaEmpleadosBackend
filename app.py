@@ -198,6 +198,7 @@ from api.analitica.routes              import setup_analitica_routes
 from api.catalogos.catalogos          import setup_catalogos_routes
 from api.conexiones_externas.routes    import setup_conexiones_externas_routes
 from api.tenants.routes                import setup_tenants_routes
+from api.leads.routes                  import setup_leads_routes
 from api.payroll.routes                import setup_payroll_routes
 
 setup_login_routes(app, mongo)
@@ -230,7 +231,16 @@ setup_analitica_routes(app, mongo)
 setup_catalogos_routes(app)
 setup_conexiones_externas_routes(app, mongo)
 setup_tenants_routes(app, mongo)
+setup_leads_routes(app)
 setup_payroll_routes(app, mongo)
+
+
+@app.route('/health')
+def health_check():
+    """Liveness check para Docker/orquestador — sin auth, sin tocar Mongo (si
+    la base cae, el healthcheck no debe tumbar el contenedor con ella; los
+    endpoints reales ya fallan por su cuenta si Mongo no responde)."""
+    return jsonify({'status': 'ok'}), 200
 
 
 @app.errorhandler(404)
