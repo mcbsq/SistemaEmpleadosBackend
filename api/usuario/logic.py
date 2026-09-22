@@ -97,7 +97,7 @@ def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE', email=No
         if s["admin_enabled"]:
             # Primero identidad en Aegis; si falla, no insertamos en Mongo (evita usuarios huérfanos).
             aegis_role = "admin" if role in ("ADMIN", "SUPER_ADMIN") else "empleado"
-            created, err = aegis_admin_create_user(email_clean, role=aegis_role)
+            created, err = aegis_admin_create_user(email_clean, role=aegis_role, tenant_id=g.org_id)
             if err:
                 body, status = err
                 logging.warning("Aegis admin create user falló: %s %s", status, body)
@@ -168,7 +168,7 @@ def get_usuarios(mongo):
         # pero sin el campo `aegis` — no bloqueamos la pantalla por el IdP.
         s = get_aegis_settings()
         if s["admin_enabled"]:
-            aegis_users, err = aegis_admin_list_users()
+            aegis_users, err = aegis_admin_list_users(tenant_id=g.org_id)
             if err:
                 logging.warning("No se pudo enriquecer usuarios con Aegis: %s", err)
             else:
@@ -233,7 +233,7 @@ def update_usuario(mongo, id, user=None, password=None, role=None, areas_adminis
             # Aegis no acepta contraseña arbitraria: genera una temporal que se
             # devuelve al admin (el valor enviado en `password` se ignora).
             if s["admin_enabled"] and doc.get("aegis_user_id"):
-                temp_password, err = aegis_admin_reset_password(str(doc["aegis_user_id"]))
+                temp_password, err = aegis_admin_reset_password(str(doc["aegis_user_id"]), tenant_id=g.org_id)
                 if err:
                     body, status = err
                     logging.warning("Aegis reset-password: %s %s", status, body)
@@ -289,7 +289,7 @@ def delete_usuario(mongo, id):
         s = get_aegis_settings()
         aegis_id = doc.get('aegis_user_id')
         if s["admin_enabled"] and aegis_id:
-            err = aegis_admin_set_active(str(aegis_id), False)
+            err = aegis_admin_set_active(str(aegis_id), False, tenant_id=g.org_id)
             if err:
                 body, status = err
                 if status != 404:

@@ -25,11 +25,20 @@ def _auth_headers(access_token: str) -> dict:
     }
 
 
-def _admin_headers() -> dict:
-    """Cabeceras para la Admin API (sin Bearer de usuario; usa ApiKey de servicio)."""
+def _admin_headers(tenant_id: Optional[str] = None) -> dict:
+    """
+    Cabeceras para la Admin API (sin Bearer de usuario; usa ApiKey de servicio).
+    `tenant_id` debe ser el tenant REAL de la empresa sobre la que se está
+    operando (g.org_id del request) — antes esto siempre mandaba el tenant
+    estático "cibercom" sin importar de qué empresa era el usuario, así que
+    crear/resetear/desactivar cuentas de cualquier empresa cliente en Aegis
+    quedaba silenciosamente aplicado al tenant equivocado (o fallaba 404/401
+    si esa identidad vivía en otro tenant). Cae a la config estática solo si
+    no se pasa nada, para no romper el flujo legacy de cibercom.
+    """
     s = get_aegis_settings()
     return {
-        "X-Tenant-Id": s["tenant_id"],
+        "X-Tenant-Id": tenant_id or s["tenant_id"],
         "X-App-Id": s["app_id"],
         "Authorization": f"ApiKey {s['api_key']}",
         "Content-Type": "application/json",
@@ -138,7 +147,7 @@ def aegis_get_me(access_token: str, tenant_id: Optional[str] = None, app_id: Opt
     return None, (err_body, r.status_code)
 
 
-def aegis_admin_create_user(email: str, role: str = "empleado") -> Tuple[Optional[dict], Optional[Tuple[Any, int]]]:
+def aegis_admin_create_user(email: str, role: str = "empleado", tenant_id: Optional[str] = None) -> Tuple[Optional[dict], Optional[Tuple[Any, int]]]:
     """
     Crea la identidad en Aegis antes (o en paralelo) de insertar en Mongo en POST /usuario.
     Aegis ya no acepta contraseña elegida por el admin: genera una temporal
@@ -167,7 +176,7 @@ def aegis_admin_create_user(email: str, role: str = "empleado") -> Tuple[Optiona
         },
     }
     try:
-        r = requests.post(url, headers=_admin_headers(), json=payload, timeout=s["timeout"])
+        r = requests.post(url, headers=_admin_headers(tenant_id), json=payload, timeout=s["timeout"])
     except requests.RequestException as e:
         logger.error("Aegis admin create user: %s", e)
         return None, ({"error": "Aegis admin no disponible"}, 503)
@@ -188,7 +197,7 @@ def aegis_admin_create_user(email: str, role: str = "empleado") -> Tuple[Optiona
     return None, (err_body, r.status_code)
 
 
-def aegis_admin_reset_password(aegis_user_id: str) -> Tuple[Optional[str], Optional[Tuple[Any, int]]]:
+def aegis_admin_reset_password(aegis_user_id: str, tenant_id: Optional[str] = None) -> Tuple[Optional[str], Optional[Tuple[Any, int]]]:
     """
     Genera una contraseña temporal en Aegis (mode=temp_password) cuando el CRUD
     de empleados pide restablecer la contraseña en PUT /usuario. Aegis no
@@ -203,7 +212,7 @@ def aegis_admin_reset_password(aegis_user_id: str) -> Tuple[Optional[str], Optio
     try:
         r = requests.post(
             url,
-            headers=_admin_headers(),
+            headers=_admin_headers(tenant_id),
             json={"mode": "temp_password", "return_temp_password": True},
             timeout=s["timeout"],
         )
@@ -221,7 +230,7 @@ def aegis_admin_reset_password(aegis_user_id: str) -> Tuple[Optional[str], Optio
     return None, (err_body, r.status_code)
 
 
-def aegis_admin_list_users() -> Tuple[Optional[list], Optional[Tuple[Any, int]]]:
+def aegis_admin_list_users(tenant_id: Optional[str] = None) -> Tuple[Optional[list], Optional[Tuple[Any, int]]]:
     """
     Lista todas las identidades del tenant en Aegis (pagina con limit/offset).
     Se usa para enriquecer GET /usuario con is_active y must_change_password.
@@ -237,7 +246,7 @@ def aegis_admin_list_users() -> Tuple[Optional[list], Optional[Tuple[Any, int]]]
         try:
             r = requests.get(
                 url,
-                headers=_admin_headers(),
+                headers=_admin_headers(tenant_id),
                 params={"limit": limit, "offset": offset},
                 timeout=s["timeout"],
             )
@@ -260,7 +269,7 @@ def aegis_admin_list_users() -> Tuple[Optional[list], Optional[Tuple[Any, int]]]
         offset += limit
 
 
-def aegis_admin_set_active(aegis_user_id: str, is_active: bool) -> Optional[Tuple[Any, int]]:
+def aegis_admin_set_active(aegis_user_id: str, is_active: bool, tenant_id: Optional[str] = None) -> Optional[Tuple[Any, int]]:
     """
     Activa/desactiva la identidad en Aegis (PATCH is_active). Se usa al borrar
     un usuario en Mongo para no dejar identidades huérfanas que sigan
@@ -274,7 +283,7 @@ def aegis_admin_set_active(aegis_user_id: str, is_active: bool) -> Optional[Tupl
     try:
         r = requests.patch(
             url,
-            headers=_admin_headers(),
+            headers=_admin_headers(tenant_id),
             json={"is_active": is_active},
             timeout=s["timeout"],
         )
