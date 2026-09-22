@@ -183,3 +183,75 @@ def test_slug_login_bypasses_ambiguous_email_resolution(monkeypatch):
     assert calls == {
         "identifier": "admin@example.com", "tenant_id": "mi-empresa", "app_id": "empleados",
     }
+
+
+def test_tenant_override_bypasses_ambiguous_email_resolution(monkeypatch):
+    """
+    Regresión real (2026-09-22): un identifier con dos identidades en Aegis
+    (duplicado de datos del lado de Aegis que no podemos limpiar nosotros —
+    nuestra API key no tiene alcance de plataforma) debe seguir pudiendo
+    entrar por el /Login genérico, sin necesitar la liga /<empresa>, mientras
+    AEGIS_TENANT_OVERRIDES tenga su entrada. Igual que requested_org_id, esto
+    debe saltarse resolve-tenant por completo — si no, el 409 de ambigüedad
+    ocurre de todas formas antes de siquiera mirar el override.
+    """
+    monkeypatch.setenv(
+        "AEGIS_TENANT_OVERRIDES",
+        '{"biancamendoza75@yahoo.com.mx": "herramientas-y-moldes-industriales"}',
+    )
+    calls = {}
+    monkeypatch.setattr("api.login.logic.get_aegis_settings", lambda: {
+        "login_enabled": True, "tenant_id": "cibercom", "app_id": "empleados",
+        "legacy_app_id": "principal", "legacy_fallback": False,
+    })
+    monkeypatch.setattr(
+        "api.login.logic.aegis_resolve_tenant",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("no debe resolver por correo si hay override")),
+    )
+
+    def reject_login(identifier, password, tenant_id=None, app_id=None):
+        calls.update(identifier=identifier, tenant_id=tenant_id, app_id=app_id)
+        return None, ({"error": "invalid"}, 401)
+    monkeypatch.setattr("api.login.logic.aegis_password_login", reject_login)
+
+    app = Flask(__name__)
+    with app.test_request_context():
+        response, status = login(
+            FakeMongo(), "BiancaMendoza75@yahoo.com.mx", "incorrecta",
+        )
+
+    assert status == 401
+    assert calls == {
+        "identifier": "BiancaMendoza75@yahoo.com.mx",
+        "tenant_id": "herramientas-y-moldes-industriales",
+        "app_id": "empleados",
+    }
+
+
+def test_tenant_override_is_ignored_for_other_identifiers(monkeypatch):
+    """El override es por identifier exacto — no debe afectar el login normal
+    de cualquier otra cuenta, que debe seguir resolviendo por Aegis."""
+    monkeypatch.setenv(
+        "AEGIS_TENANT_OVERRIDES",
+        '{"biancamendoza75@yahoo.com.mx": "herramientas-y-moldes-industriales"}',
+    )
+    monkeypatch.setattr("api.login.logic.get_aegis_settings", lambda: {
+        "login_enabled": True, "tenant_id": "cibercom", "app_id": "empleados",
+        "legacy_app_id": "principal", "legacy_fallback": False,
+    })
+    resolved_with = {}
+
+    def fake_resolve(identifier, app):
+        resolved_with.update(identifier=identifier, app=app)
+        return {"tenant_key": "cibercom", "app_key": "empleados"}, None
+    monkeypatch.setattr("api.login.logic.aegis_resolve_tenant", fake_resolve)
+    monkeypatch.setattr(
+        "api.login.logic.aegis_password_login",
+        lambda *a, **k: (None, ({"error": "invalid"}, 401)),
+    )
+
+    app = Flask(__name__)
+    with app.test_request_context():
+        login(FakeMongo(), "otra-cuenta@example.com", "incorrecta")
+
+    assert resolved_with == {"identifier": "otra-cuenta@example.com", "app": "empleados"}

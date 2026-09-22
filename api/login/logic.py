@@ -15,7 +15,9 @@
 from flask import jsonify, g
 from werkzeug.security import check_password_hash
 from flask_jwt_extended import create_access_token
+import json
 import logging
+import os
 
 from core.aegis_config import get_aegis_settings
 from core.aegis_client import aegis_password_login, aegis_get_me, aegis_change_password, aegis_resolve_tenant
@@ -24,6 +26,38 @@ from core.fechas_especiales import verificar_fechas_especiales
 from api.tenants.logic import registrar_tenant
 
 logger = logging.getLogger(__name__)
+
+
+def _tenant_overrides():
+    """
+    Mapeo TEMPORAL identifier→org_id para cuentas que Aegis ve como ambiguas
+    (más de un tenant para el mismo identifier) por una duplicación de datos
+    del lado de Aegis que todavía no se ha limpiado ahí — nuestra API key no
+    tiene alcance de plataforma para desactivar la identidad duplicada
+    nosotros mismos (confirmado 2026-09-22: 403 "Platform operator session
+    required" incluso con una cuenta SUPER_ADMIN de cibercom).
+
+    Con una entrada aquí, ese identifier se manda DIRECTO al org_id indicado
+    sin pasar por resolve-tenant (igual que si hubiera entrado por /<empresa>),
+    así que el 409 de ambigüedad nunca ocurre para él, en ningún cliente
+    (web/mobile) — no es una solución de UI, es del lado del servidor.
+
+    QUITAR la entrada correspondiente (o toda la variable) en cuanto el
+    equipo de Aegis desactive la identidad duplicada — dejarla más tiempo del
+    necesario oculta si Aegis se limpia o no.
+
+    Formato en AEGIS_TENANT_OVERRIDES (env var, JSON):
+      {"biancamendoza75@yahoo.com.mx": "herramientas-y-moldes-industriales"}
+    """
+    raw = (os.environ.get("AEGIS_TENANT_OVERRIDES") or "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return {str(k).strip().lower(): str(v).strip().lower() for k, v in data.items()}
+    except (ValueError, AttributeError, TypeError):
+        logger.error("AEGIS_TENANT_OVERRIDES no es un JSON válido — se ignora.")
+        return {}
 
 
 def _find_usuario_after_aegis(mongo, profile: dict):
@@ -158,11 +192,15 @@ def login(mongo, identifier, password, requested_org_id=None):
             tenant_id, app_id = settings["tenant_id"], settings["app_id"]
             resolved = None
             requested_org_id = (requested_org_id or "").strip().lower()
+            override_tenant = _tenant_overrides().get((identifier or "").strip().lower())
             if requested_org_id:
                 # La entrada /<empresa> desambigua correos que pertenecen a
                 # varios tenants. Aegis sigue siendo quien valida que las
                 # credenciales realmente correspondan a ese tenant.
                 tenant_id, app_id = requested_org_id, settings["app_id"]
+            elif override_tenant:
+                logger.info("Login usando override de tenant temporal para identifier=%s", identifier[:3] + "...")
+                tenant_id, app_id = override_tenant, settings["app_id"]
             else:
                 resolved, resolve_err = aegis_resolve_tenant(identifier, settings["app_id"])
                 if resolved:
