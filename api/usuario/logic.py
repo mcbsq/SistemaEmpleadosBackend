@@ -67,6 +67,29 @@ def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE', email=No
     if s["admin_enabled"]:
         if not email_clean or "@" not in email_clean:
             return jsonify({'error': 'El correo electrónico es obligatorio para el alta en Aegis.'}), 400
+
+        # Invariante de negocio: un correo pertenece a UNA sola empresa. Sin
+        # este chequeo, dar de alta el mismo correo dos veces bajo dos org_id
+        # distintos (ej. un typo de slug corregido sin borrar el primer
+        # intento) crea dos identidades en Aegis para el mismo identifier —
+        # Aegis luego rechaza el login de esa cuenta con "pertenece a más de
+        # una empresa" porque resolve-tenant ya no puede desambiguar (caso
+        # real: cuenta de Herramientas y Moldes Industriales duplicada bajo
+        # dos variantes de slug, 2026-09-22). mongo.db.raw hace la búsqueda
+        # cross-tenant a propósito — el aislamiento normal por org_id
+        # escondería justo la fila que necesitamos ver.
+        otra_empresa = mongo.db.raw.usuario.find_one({
+            "email": email_clean,
+            "org_id": {"$ne": g.org_id},
+        })
+        if otra_empresa:
+            logging.warning(
+                "Alta de usuario bloqueada: %s ya tiene cuenta en la empresa '%s'.",
+                email_clean, otra_empresa.get("org_id"),
+            )
+            return jsonify({
+                'error': 'Ese correo ya tiene una cuenta en otra empresa. Un mismo correo no puede pertenecer a más de una empresa.',
+            }), 409
     else:
         if not password:
             return jsonify({'error': 'La contraseña es obligatoria.'}), 400

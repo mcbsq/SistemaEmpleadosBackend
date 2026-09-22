@@ -28,6 +28,70 @@ def _aegis_settings_stub(**overrides):
     return lambda: base
 
 
+def test_create_usuario_rejects_an_email_already_used_by_another_company(monkeypatch):
+    """
+    La invariante real: un correo pertenece a UNA sola empresa. Esta prueba
+    reproduce exactamente el caso de producción — un segundo intento de alta
+    para el mismo correo bajo un org_id distinto (una variante de slug
+    corregida sin borrar la primera) debe rechazarse ANTES de llamar a Aegis,
+    no crear una segunda identidad duplicada.
+    """
+    aegis_calls = []
+    monkeypatch.setattr("api.usuario.logic.get_aegis_settings", _aegis_settings_stub())
+    monkeypatch.setattr(
+        "api.usuario.logic.aegis_admin_create_user",
+        lambda *a, **k: (aegis_calls.append((a, k)) or ({"id": "aegis-2", "temp_password": "x"}, None)),
+    )
+    monkeypatch.setattr("api.usuario.logic.send_temp_password_email", lambda *a, **k: True)
+
+    mongo = FakeMongo()
+    mongo.db.usuario.insert_one({
+        "org_id": "herramientas_y_moldes_industriales",
+        "user": "bianca", "email": "bianca@example.com",
+        "role": "SUPER_ADMIN", "aegis_user_id": "aegis-1",
+    })
+
+    app = Flask(__name__)
+    with app.test_request_context():
+        g.org_id = "herramientas-y-moldes-industriales"
+        response, status = create_usuario(
+            mongo, "bianca", None, None,
+            role="SUPER_ADMIN", email="bianca@example.com",
+        )
+
+    assert status == 409
+    assert "otra empresa" in response.get_json()["error"]
+    assert aegis_calls == []  # nunca debió intentar crear la segunda identidad en Aegis
+
+
+def test_create_usuario_allows_same_email_reused_within_the_same_company(monkeypatch):
+    """El chequeo es cross-empresa, no debe bloquear un alta legítima dentro
+    de la MISMA empresa (ej. recrear tras un borrado previo)."""
+    monkeypatch.setattr("api.usuario.logic.get_aegis_settings", _aegis_settings_stub())
+    monkeypatch.setattr(
+        "api.usuario.logic.aegis_admin_create_user",
+        lambda *a, **k: ({"id": "aegis-1", "temp_password": "x"}, None),
+    )
+    monkeypatch.setattr("api.usuario.logic.send_temp_password_email", lambda *a, **k: True)
+
+    mongo = FakeMongo()
+    mongo.db.usuario.insert_one({
+        "org_id": "herramientas-y-moldes-industriales",
+        "user": "otro", "email": "bianca@example.com",
+        "role": "EMPLOYEE", "aegis_user_id": "aegis-0",
+    })
+
+    app = Flask(__name__)
+    with app.test_request_context():
+        g.org_id = "herramientas-y-moldes-industriales"
+        response, status = create_usuario(
+            mongo, "bianca2", None, None,
+            role="SUPER_ADMIN", email="bianca@example.com",
+        )
+
+    assert status == 201
+
+
 def test_create_usuario_sends_the_real_tenant_to_aegis(monkeypatch):
     captured = {}
     monkeypatch.setattr("api.usuario.logic.get_aegis_settings", _aegis_settings_stub())
