@@ -56,6 +56,11 @@ DEFAULT_CONFIG = {
     ],
     "customFields": [],
     "roles": ["SUPER_ADMIN", "ADMIN", "EMPLOYEE"],
+    # Duración de la sesión (minutos de vida del JWT) — antes era un solo
+    # valor fijo global (JWT_ACCESS_MINUTES, 15 min) para todas las
+    # empresas. Cada SUPER_ADMIN decide la suya desde Configuración; el
+    # criterio de seguridad de una empresa no debe imponerse a otra.
+    "sessionMinutes": 30,
     # ── Reglas de negocio configurables ──
     "vacaciones": {
         "tabla_dias_por_antiguedad": DEFAULT_TABLA_VACACIONES,
@@ -126,3 +131,17 @@ def get_vacaciones_config(mongo, org_id="default"):
     doc = mongo.db.organizacion.find_one({"org_id": org_id}) or {}
     merged = _merge_deep(DEFAULT_CONFIG, doc)
     return merged["vacaciones"]
+
+
+def get_session_minutes(mongo, org_id):
+    """
+    Helper interno para login/logic.py — cuántos minutos dura el JWT de esta
+    empresa. mongo.db.raw porque el login corre ANTES de que exista g.org_id
+    (el JWT ni se ha emitido todavía, es lo que esta función ayuda a crear).
+    """
+    try:
+        doc = mongo.db.raw.organizacion.find_one({"org_id": org_id}) or {}
+        minutes = doc.get("sessionMinutes", DEFAULT_CONFIG["sessionMinutes"])
+        return max(5, min(int(minutes), 1440))
+    except (TypeError, ValueError):
+        return DEFAULT_CONFIG["sessionMinutes"]

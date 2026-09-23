@@ -15,6 +15,7 @@
 from flask import jsonify, g
 from werkzeug.security import check_password_hash
 from flask_jwt_extended import create_access_token
+from datetime import timedelta
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ from core.aegis_client import aegis_password_login, aegis_get_me, aegis_change_p
 from core.permissions import PERMISOS_DEFAULT, DASHBOARD_MODULOS, get_permisos_for_role
 from core.fechas_especiales import verificar_fechas_especiales
 from api.tenants.logic import registrar_tenant
+from api.org.logic import get_session_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +133,10 @@ def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_pa
         "org_id":              org_id,
         "areas_administradas": areas_administradas,
     }
-    access_token = create_access_token(identity=user, additional_claims=claims)
+    access_token = create_access_token(
+        identity=user, additional_claims=claims,
+        expires_delta=timedelta(minutes=get_session_minutes(mongo, org_id)),
+    )
 
     logger.info("Login exitoso: %s (%s)", user, role)
     verificar_fechas_especiales(mongo)
