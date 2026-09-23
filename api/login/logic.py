@@ -332,7 +332,11 @@ def change_password(mongo, jwt_claims, current_password, new_password):
             if len(new_password) < 12:
                 return jsonify({"error": "La nueva contraseña debe tener al menos 12 caracteres."}), 400
             identifier = usuario.get("email") or user
-            err = aegis_change_password(identifier, current_password, new_password)
+            # org_id en Mongo es el tenant_key que Aegis ya resolvió para
+            # esta cuenta (no es ambiguo como en el login genérico — este
+            # documento es EL registro de este usuario, sin necesidad de
+            # resolve-tenant ni del override temporal de esa función).
+            err = aegis_change_password(identifier, current_password, new_password, tenant_id=usuario.get("org_id"))
             if err:
                 body, status = err
                 if status in (401, 403):

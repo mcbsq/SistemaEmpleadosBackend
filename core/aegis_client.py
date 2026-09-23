@@ -301,23 +301,39 @@ def aegis_admin_set_active(aegis_user_id: str, is_active: bool, tenant_id: Optio
     return (err_body, r.status_code)
 
 
-def aegis_change_password(identifier: str, current_password: str, new_password: str) -> Optional[Tuple[Any, int]]:
+def aegis_change_password(
+    identifier: str, current_password: str, new_password: str,
+    tenant_id: Optional[str] = None, app_id: Optional[str] = None,
+) -> Optional[Tuple[Any, int]]:
     """
     Cambia la contraseña del propio usuario en Aegis: login con la contraseña
     actual y luego POST /v1/auth/change-password con el token obtenido.
     Sirve para exponer un /change-password en este backend sin almacenar
     tokens de Aegis. Retorna None si OK, o (cuerpo_error, código_http).
+
+    `tenant_id`/`app_id`: SIN esto, el login interno caía en el tenant
+    estático "cibercom" — para cualquier cuenta de una empresa cliente
+    distinta, Aegis respondía 401 "credenciales inválidas" (el identifier
+    no existe en cibercom) y el usuario veía "la contraseña que escribiste
+    no es correcta" al definir su contraseña por primera vez, aunque la
+    hubiera escrito bien (caso real: cuenta de Herramientas y Moldes
+    Industriales, 2026-09-23). El caller debe pasar el org_id real del
+    usuario (mongo.db.usuario.org_id, que es el tenant_key resuelto por
+    Aegis en su login original).
     """
     s = get_aegis_settings()
-    tokens, err = aegis_password_login(identifier, current_password)
+    tokens, err = aegis_password_login(identifier, current_password, tenant_id=tenant_id, app_id=app_id)
     if err:
         return err
 
     url = f"{s['base_url']}/v1/auth/change-password"
+    headers = _auth_headers(tokens["access_token"])
+    headers["X-Tenant-Id"] = tenant_id or s["tenant_id"]
+    headers["X-App-Id"] = app_id or s["app_id"]
     try:
         r = requests.post(
             url,
-            headers=_auth_headers(tokens["access_token"]),
+            headers=headers,
             json={"current_password": current_password, "new_password": new_password},
             timeout=s["timeout"],
         )
