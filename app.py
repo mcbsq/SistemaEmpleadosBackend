@@ -172,7 +172,6 @@ from api.login.routes                 import setup_login_routes
 from api.usuario.routes               import setup_usuario_routes
 from api.empleados.routes             import setup_empleados_routes
 from api.catalogodepto.routes         import setup_catalogodepto_routes
-from api.comportamientolaboral.routes import setup_comportamientolaboral_routes
 from api.datoscontacto.routes         import setup_datoscontacto_routes
 from api.direccion.routes             import setup_direccion_routes
 from api.educacion.routes             import setup_educacion_routes
@@ -205,7 +204,6 @@ setup_login_routes(app, mongo)
 setup_usuario_routes(app, mongo)
 setup_empleados_routes(app, mongo)
 setup_catalogodepto_routes(app, mongo)
-setup_comportamientolaboral_routes(app, mongo)
 setup_datoscontacto_routes(app, mongo)
 setup_direccion_routes(app, mongo)
 setup_educacion_routes(app, mongo)
