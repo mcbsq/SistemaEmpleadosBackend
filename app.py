@@ -36,6 +36,23 @@ CORS(app,
      supports_credentials=False)
 
 
+@app.after_request
+def no_cache(response):
+    """
+    Sin esto, Vercel le pone a CADA respuesta de función serverless su
+    cache-control por default: "public, max-age=0, must-revalidate" — que
+    aunque exige revalidar, sigue siendo "public" en respuestas que traen
+    datos por tenant/usuario (dashboards, /org/:id/config, empleados...).
+    Eso explica los dashboards que "a veces no cargan": el navegador o el
+    edge de Vercel pueden servir una copia cacheada en vez de pegarle al
+    backend. Forzar no-store en todo asegura que cada request siempre trae
+    datos frescos — nunca una respuesta vieja o de otro tenant.
+    """
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
 @app.before_request
 def handle_preflight():
     if request.method == "OPTIONS":
