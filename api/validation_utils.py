@@ -1,8 +1,8 @@
 # api/validation_utils.py
 #
 # Helper compartido para no repetir la misma validación de "faltan campos"
-# en cada blueprint. Antes, rutas como catalogodepto/comportamientolaboral/
-# prestamo usaban request.json['Campo'] directo: si faltaba el campo,
+# en cada blueprint. Antes, rutas como catalogodepto/prestamo usaban
+# request.json['Campo'] directo: si faltaba el campo,
 # Flask tronaba con un KeyError sin capturar → 500 con traceback crudo en
 # vez de un 400 claro para el frontend.
 
