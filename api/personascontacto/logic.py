@@ -1,4 +1,12 @@
 # api/personascontacto/logic.py
+#
+# Rediseño: antes cada contacto de emergencia era su propio documento
+# (insert_one por contacto, update_one solo tocaba el primero que
+# encontrara) — no soportaba más de uno de forma confiable y el PUT de
+# actualización pisaba el contacto equivocado si había varios. Ahora, igual
+# que redsocial, es UN documento por empleado con un arreglo `Contactos` —
+# el frontend manda la lista completa en cada guardado (agregar/quitar es
+# solo modificar el arreglo antes de mandarlo).
 from flask import jsonify, Response
 from bson import json_util
 from bson.objectid import ObjectId
@@ -8,43 +16,31 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def create_personascontacto(mongo, personalcontacto):
-    if not personalcontacto:
-        return jsonify({'error': 'No data provided for personalcontacto'}), 400
+def _serializar_contacto(c):
+    return {
+        'parenstesco':       c.get('parenstesco', ''),
+        'nombreContacto':    c.get('nombreContacto', ''),
+        'telefonoContacto':  c.get('telefonoContacto', ''),
+        'correoContacto':    c.get('correoContacto', ''),
+        'direccionContacto': c.get('direccionContacto', ''),
+        'whatsappContacto':  c.get('whatsappContacto', ''),
+        'telegramContacto':  c.get('telegramContacto', ''),
+        'facebookContacto':  c.get('facebookContacto', ''),
+    }
 
-    parenstesco       = personalcontacto.get('parenstesco', '')
-    nombreContacto    = personalcontacto.get('nombreContacto', '')
-    telefonoContacto  = personalcontacto.get('telefonoContacto', '')
-    correoContacto    = personalcontacto.get('correoContacto', '')
-    direccionContacto = personalcontacto.get('direccionContacto', '')
-    empleadoid_str    = personalcontacto.get('empleadoid', '')
 
-    if not parenstesco or not nombreContacto:
-        return jsonify({'error': 'parenstesco and nombreContacto are required'}), 400
-
+def get_personascontacto_by_empleado(mongo, empleadoid):
     try:
-        empleadoid = ObjectId(empleadoid_str)
+        eid = ObjectId(empleadoid)
     except (InvalidId, Exception):
-        return jsonify({'error': 'Invalid ObjectId for empleadoid'}), 400
-
-    result = mongo.db.personascontacto.insert_one({
-        'empleadoid':        empleadoid,
-        'parenstesco':       parenstesco,
-        'nombreContacto':    nombreContacto,
-        'telefonoContacto':  telefonoContacto,
-        'correoContacto':    correoContacto,
-        'direccionContacto': direccionContacto,
-    })
-
-    return jsonify({
-        '_id':               str(result.inserted_id),
-        'empleadoid':        str(empleadoid),
-        'parenstesco':       parenstesco,
-        'nombreContacto':    nombreContacto,
-        'telefonoContacto':  telefonoContacto,
-        'correoContacto':    correoContacto,
-        'direccionContacto': direccionContacto,
-    }), 201
+        return jsonify({'error': 'Invalid ObjectId'}), 400
+    try:
+        doc = mongo.db.personascontacto.find_one({'empleadoid': eid})
+        contactos = [_serializar_contacto(c) for c in (doc.get('Contactos', []) if doc else [])]
+        return jsonify({'Contactos': contactos}), 200
+    except Exception as e:
+        logger.error(f"Error en get_personascontacto_by_empleado: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 def get_personascontactos(mongo):
@@ -59,65 +55,46 @@ def get_personascontactos(mongo):
         return jsonify({'error': str(e)}), 500
 
 
-def get_personascontacto_by_empleado(mongo, empleadoid):
-    try:
-        docs = list(mongo.db.personascontacto.find({'empleadoid': ObjectId(empleadoid)}))
-        result = [{
-            '_id':               str(d['_id']),
-            'empleadoid':        str(d['empleadoid']),
-            'parenstesco':       d.get('parenstesco', ''),
-            'nombreContacto':    d.get('nombreContacto', ''),
-            'telefonoContacto':  d.get('telefonoContacto', ''),
-            'correoContacto':    d.get('correoContacto', ''),
-            'direccionContacto': d.get('direccionContacto', ''),
-        } for d in docs]
-        return jsonify(result), 200   # lista vacía es válida
-    except Exception as e:
-        return jsonify({'message': str(e)}), 500
-
-
 def delete_personascontacto(mongo, empleadoid):
     try:
-        result = mongo.db.personascontacto.delete_one({'empleadoid': ObjectId(empleadoid)})
+        eid = ObjectId(empleadoid)
+    except (InvalidId, Exception):
+        return jsonify({'error': 'Invalid ObjectId'}), 400
+    try:
+        result = mongo.db.personascontacto.delete_one({'empleadoid': eid})
         if result.deleted_count > 0:
-            return jsonify({'message': f'Contacto {empleadoid} eliminado'}), 200
+            return jsonify({'message': f'Contactos de {empleadoid} eliminados'}), 200
         return jsonify({'message': 'No encontrado'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-# FIX: antes esta función releía request.json y buscaba un 'empleadoid'
-# DENTRO del body (personalcontacto.empleadoid) para armar el filtro de
-# actualización, ignorando por completo el <empleadoid> real de la URL.
-# Si ambos no coincidían, se actualizaba (o se fallaba en actualizar) el
-# contacto equivocado. Ahora usa el empleadoid de la URL, que es lo que
-# la ruta /personascontacto/empleado/<empleadoid> promete.
-def update_personascontacto_by_empleado(mongo, empleadoid, personal_contacto):
-    if not personal_contacto:
-        return jsonify({'error': 'No data provided'}), 400
-
-    parenstesco       = personal_contacto.get('parenstesco', '')
-    nombre_contacto    = personal_contacto.get('nombreContacto', '')
-    telefono_contacto  = personal_contacto.get('telefonoContacto', '')
-    correo_contacto    = personal_contacto.get('correoContacto', '')
-    direccion_contacto = personal_contacto.get('direccionContacto', '')
-
-    if not parenstesco or not nombre_contacto:
-        return jsonify({'error': 'parenstesco and nombreContacto are required'}), 400
-
+def update_personascontacto_by_empleado(mongo, empleadoid, contactos_nuevos):
+    """
+    Reemplaza la lista completa de contactos de emergencia de un empleado.
+    `contactos_nuevos` es un arreglo (puede venir vacío — borrar todos es
+    válido). Ya no exige nombreContacto/parenstesco a nivel global: se
+    valida por contacto individual, así uno incompleto no tumba el resto.
+    """
     try:
         eid = ObjectId(empleadoid)
-    except Exception:
+    except (InvalidId, Exception):
         return jsonify({'error': 'Invalid ObjectId'}), 400
+
+    if not isinstance(contactos_nuevos, list):
+        return jsonify({'error': 'Contactos debe ser una lista'}), 400
+
+    limpios = []
+    for c in contactos_nuevos:
+        nombre = (c or {}).get('nombreContacto', '').strip()
+        parentesco = (c or {}).get('parenstesco', '').strip()
+        if not nombre or not parentesco:
+            continue  # contacto incompleto — se omite en vez de tronar el guardado
+        limpios.append(_serializar_contacto(c))
 
     mongo.db.personascontacto.update_one(
         {'empleadoid': eid},
-        {'$set': {
-            'parenstesco':       parenstesco,
-            'nombreContacto':    nombre_contacto,
-            'telefonoContacto':  telefono_contacto,
-            'correoContacto':    correo_contacto,
-            'direccionContacto': direccion_contacto,
-        }}
+        {'$set': {'empleadoid': eid, 'Contactos': limpios}},
+        upsert=True,
     )
-    return jsonify({'message': f'Contacto actualizado para empleado {empleadoid}'}), 200
+    return jsonify({'message': f'Contactos actualizados para empleado {empleadoid}', 'Contactos': limpios}), 200

@@ -93,9 +93,17 @@ def update_educacion(mongo, empleado_id, data):
         if not set_data:
             return jsonify({'error': 'Nada que actualizar'}), 400
 
-        result = mongo.db.educacion.update_one({'empleado_id': eid}, {'$set': set_data})
-        if result.matched_count > 0:
-            return jsonify({'message': 'Educación actualizada'}), 200
-        return jsonify({'message': 'No encontrado'}), 404
+        # FIX: sin upsert, un empleado que nunca tuvo un documento de
+        # educación (ninguno lo crea explícitamente — el perfil solo llama
+        # a este PUT) tronaba con 404 en cada guardado. Como esto se manda
+        # SIEMPRE junto con el resto del perfil (Perfil.js las agrupa en un
+        # solo Promise.all), ese 404 hacía fallar el guardado COMPLETO del
+        # perfil, no solo la sección de Educación/Descripción.
+        mongo.db.educacion.update_one(
+            {'empleado_id': eid},
+            {'$set': {**set_data, 'empleado_id': eid}},
+            upsert=True,
+        )
+        return jsonify({'message': 'Educación actualizada'}), 200
     except (InvalidId, Exception) as e:
         return jsonify({'error': str(e)}), 500

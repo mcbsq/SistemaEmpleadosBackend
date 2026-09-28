@@ -72,15 +72,24 @@ def delete_datoscontacto(mongo, id):
 
 def update_datoscontacto(mongo, empleado_id, TelFijo, TelCelular, IdWhatsApp, IdTelegram, ListaCorreos):
     try:
+        # FIX: sin upsert=True, un empleado que nunca tuvo datoscontacto
+        # creado (nadie llamó create_datoscontacto para él) hacía que este
+        # update_one no encontrara ningún documento que tocar — respondía
+        # 200 igual, pero no guardaba nada. Auto-guardado desde el perfil
+        # (Perfil.js) llama a este mismo endpoint sin pasar antes por un
+        # alta explícita, así que esto se disparaba todo el tiempo.
+        eid = ObjectId(empleado_id)
         mongo.db.datoscontacto.update_one(
-            {'EmpleadoId': ObjectId(empleado_id)},
+            {'EmpleadoId': eid},
             {'$set': {
+                'EmpleadoId':   eid,
                 'TelFijo':      TelFijo,
                 'TelCelular':   TelCelular,
                 'IdWhatsApp':   IdWhatsApp,
                 'IdTelegram':   IdTelegram,
                 'ListaCorreos': ListaCorreos,
-            }}
+            }},
+            upsert=True,
         )
         return jsonify({'message': f'Datos de contacto actualizados para {empleado_id}'}), 200
     except Exception as e:
