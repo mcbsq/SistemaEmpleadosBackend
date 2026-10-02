@@ -26,3 +26,6 @@ venv.bak/
 ._*
 .DS_Store
 .worktrees/
+
+# Configuración local de Claude Code
+.claude/
