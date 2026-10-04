@@ -19,7 +19,7 @@ def get_permisos(mongo):
 def catalogo_para_rol(mongo, role):
     permisos = get_permisos(mongo)
     otorgados = set(permisos.get(role, []))
-    siempre_todo = role in ("ADMIN", "SUPER_ADMIN")
+    siempre_todo = role in ("ADMIN", "SUPER_ADMIN", "RH")
     return [
         {**r, "permitido": siempre_todo or r["id"] in otorgados}
         for r in CATALOGO_REPORTES
@@ -62,13 +62,13 @@ def guardar_permisos(mongo, data, identity):
 
 
 def _puede(role, permisos, reporte_id):
-    return role in ("ADMIN", "SUPER_ADMIN") or reporte_id in permisos.get(role, [])
+    return role in ("ADMIN", "SUPER_ADMIN", "RH") or reporte_id in permisos.get(role, [])
 
 
 def resumen_sistema(mongo, identity):
     role = identity.get("role") if isinstance(identity, dict) else None
     permisos = get_permisos(mongo)
-    es_admin = role in ("ADMIN", "SUPER_ADMIN")
+    es_admin = role in ("ADMIN", "SUPER_ADMIN", "RH")
     resumen = {}
 
     if _puede(role, permisos, "headcount"):
@@ -148,7 +148,7 @@ def resumen_sistema(mongo, identity):
 
 def _tiene_acceso_reporte(mongo, identity, reporte_id):
     role = identity.get("role") if isinstance(identity, dict) else None
-    if role in ("ADMIN", "SUPER_ADMIN"):
+    if role in ("ADMIN", "SUPER_ADMIN", "RH"):
         return True
     permisos = get_permisos(mongo)
     return reporte_id in permisos.get(role, [])
@@ -170,7 +170,7 @@ def ver_reporte(mongo, reporte_id, identity):
 
 def exportar_reporte(mongo, reporte_id, identity):
     role = identity.get("role") if isinstance(identity, dict) else None
-    if role not in ("ADMIN", "SUPER_ADMIN"):
+    if role not in ("ADMIN", "SUPER_ADMIN", "RH"):
         permisos = get_permisos(mongo)
         if reporte_id not in permisos.get(role, []):
             return jsonify({"error": "No tienes permiso para exportar este reporte"}), 403

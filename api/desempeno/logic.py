@@ -224,7 +224,7 @@ def guardar_autoevaluacion(mongo, evaluacion_id, data, identity):
 
     own_empleado_id = identity.get("empleado_id") if isinstance(identity, dict) else None
     role = identity.get("role") if isinstance(identity, dict) else None
-    if role not in ("ADMIN", "SUPER_ADMIN") and str(doc["empleado_id"]) != str(own_empleado_id):
+    if role not in ("ADMIN", "SUPER_ADMIN", "RH") and str(doc["empleado_id"]) != str(own_empleado_id):
         return jsonify({"error": "Solo puedes llenar tu propia autoevaluación"}), 403
 
     criterios, puntaje_criterios = _procesar_criterios(data.get("criterios"))

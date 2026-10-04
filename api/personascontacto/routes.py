@@ -1,6 +1,8 @@
 from flask import request
 from .logic import (get_personascontactos, get_personascontacto_by_empleado, delete_personascontacto, update_personascontacto_by_empleado)
 from api.auth_decorators import require_roles, require_self_or_roles
+from core.aviso_cambios import avisar_rh
+from core.visibilidad_perfil import require_seccion
 
 
 def setup_personascontacto_routes(app, mongo):
@@ -14,8 +16,10 @@ def setup_personascontacto_routes(app, mongo):
     def get_personascontactos_route():
         return get_personascontactos(mongo)
 
+    # Propio, RH, jefe directo y médico: quien tendría que llamar a alguien
+    # en una emergencia (ver core/visibilidad_perfil.py).
     @app.route('/personascontacto/empleado/<empleadoid>', methods=['GET'])
-    @require_self_or_roles('empleadoid', 'ADMIN', 'SUPER_ADMIN')
+    @require_seccion(mongo, 'emergencia', id_param='empleadoid')
     def get_personascontacto_by_empleado_route(empleadoid):
         return get_personascontacto_by_empleado(mongo, empleadoid)
 
@@ -26,6 +30,7 @@ def setup_personascontacto_routes(app, mongo):
 
     @app.route('/personascontacto/empleado/<empleadoid>', methods=['PUT'])
     @require_self_or_roles('empleadoid', 'ADMIN', 'SUPER_ADMIN')
+    @avisar_rh(mongo, 'emergencia', id_param='empleadoid')
     def update_personascontacto_by_empleado_route(empleadoid):
         contactos = request.json.get('personalcontacto', [])
         return update_personascontacto_by_empleado(mongo, empleadoid, contactos)

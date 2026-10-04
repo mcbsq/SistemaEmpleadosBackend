@@ -36,11 +36,11 @@ ORG_ID = "qa_empresa_prueba_unitaria"  # prefijo inconfundible, nunca usado por 
 TENANT_CIBERCOM = get_aegis_settings()["tenant_id"] or "cibercom"
 
 
-def _jwt_para(user, role, empleado_id="", org_id=ORG_ID, areas=None):
+def _jwt_para(user, role, empleado_id="", org_id=ORG_ID, areas=None, plataforma=False):
     with app.app_context():
         return create_access_token(identity=user, additional_claims={
             "user": user, "role": role, "empleado_id": empleado_id or "",
-            "org_id": org_id, "areas_administradas": areas or [],
+            "org_id": org_id, "areas_administradas": areas or [], "plataforma": plataforma,
         })
 
 
@@ -140,8 +140,14 @@ def test_admin_de_empresa_cliente_tampoco_puede_ver_registro_de_empresas(client,
     assert resp.status_code == 403
 
 
+def test_admin_de_la_empresa_cibercom_sin_marca_de_plataforma_no_ve_empresas(client):
+    # Administrar la EMPRESA Cibercom no es lo mismo que ser dueño de la plataforma.
+    token = _jwt_para("admin_empresa_cibercom_qa", "SUPER_ADMIN", org_id=TENANT_CIBERCOM)
+    assert client.get("/admin/tenants", headers={"Authorization": f"Bearer {token}"}).status_code == 403
+
+
 def test_super_admin_de_cibercom_si_puede_ver_registro_de_empresas(client, empresa_qa):
-    token = _jwt_para("op_cibercom_qa", "SUPER_ADMIN", org_id=TENANT_CIBERCOM)
+    token = _jwt_para("op_cibercom_qa", "SUPER_ADMIN", org_id=TENANT_CIBERCOM, plataforma=True)
     resp = client.get("/admin/tenants", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     assert isinstance(resp.get_json(), list)

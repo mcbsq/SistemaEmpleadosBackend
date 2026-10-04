@@ -9,6 +9,7 @@ from .logic import (
     delete_direccion,
 )
 from api.auth_decorators import require_roles, require_self_or_roles
+from core.aviso_cambios import avisar_rh
 
 
 def setup_direccion_routes(app, mongo):
@@ -35,6 +36,7 @@ def setup_direccion_routes(app, mongo):
 
     @app.route('/direccion/empleado/<empleado_id>', methods=['PUT'])
     @require_self_or_roles('empleado_id', 'ADMIN', 'SUPER_ADMIN')
+    @avisar_rh(mongo, 'domicilio')
     def update_direccion_by_empleado_route(empleado_id):
         return update_direccion_by_empleado(mongo, empleado_id)
 

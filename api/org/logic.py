@@ -46,6 +46,10 @@ DEFAULT_CONFIG = {
         "vacaciones": True,
         "prestamos": True,
         "documentos_financieros": True,
+        # Apagado por defecto (observación de RH, oct 2026): los empleados
+        # casi no lo llenan y no aporta a la operación de RH. Cada empresa
+        # puede encenderlo en Configuración → Módulos.
+        "redes_sociales": False,
     },
     "kpis": [
         {"id": "total_empleados", "label": "Total empleados", "visible": True, "color": "#5B8AF0"},
@@ -65,6 +69,8 @@ DEFAULT_CONFIG = {
     "vacaciones": {
         "tabla_dias_por_antiguedad": DEFAULT_TABLA_VACACIONES,
         "roles_aprueban": ["ADMIN", "SUPER_ADMIN"],
+        # Doble visto bueno: jefe directo (según la ficha laboral) + RH.
+        "doble_aprobacion": True,
         "notificar_por_correo": True,
     },
 }

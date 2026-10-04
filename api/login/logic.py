@@ -127,6 +127,9 @@ def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_pa
     areas_administradas = (usuario.get("areas_administradas") or []) if role == "ADMIN" else []
 
     claims = {
+        # Dueño de la plataforma (cuenta suprema de Cibercom). Distinto del
+        # SUPER_ADMIN de cualquier empresa, incluida la propia Cibercom.
+        "plataforma":          bool(usuario.get("plataforma")),
         "user":                user,
         "role":                role,
         "empleado_id":         empleado_id,
@@ -151,6 +154,7 @@ def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_pa
         "modulos":              modulos,
         "areas_administradas":  areas_administradas,
         "must_change_password": must_change_password,
+        "plataforma":           bool(usuario.get("plataforma")),
     }), 200
 
 

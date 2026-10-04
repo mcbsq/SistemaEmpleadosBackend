@@ -59,7 +59,7 @@ def verificar_fechas_especiales(mongo):
             if usuario_doc and usuario_doc.get("user"):
                 crear_notificacion(
                     mongo, usuario_doc["user"], "cumpleanos",
-                    "¡Feliz cumpleaños! 🎂",
+                    "¡Feliz cumpleaños!",
                     "Todo el equipo te desea un excelente día.",
                     link=f"/Perfil/{emp['_id']}",
                 )
@@ -94,7 +94,7 @@ def verificar_fechas_especiales(mongo):
             if usuario_doc and usuario_doc.get("user"):
                 crear_notificacion(
                     mongo, usuario_doc["user"], "aniversario",
-                    f"¡{anios} {plural} en la empresa! 🎉",
+                    f"¡{anios} {plural} en la empresa!",
                     "Gracias por ser parte del equipo.",
                     link=f"/Perfil/{emp['_id']}",
                 )

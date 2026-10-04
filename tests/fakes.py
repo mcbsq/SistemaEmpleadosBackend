@@ -51,13 +51,13 @@ class FakeCollection:
         self._docs[doc["_id"]] = doc
         return type("Result", (), {"inserted_id": doc["_id"]})()
 
-    def find_one(self, filtro=None):
+    def find_one(self, filtro=None, projection=None):
         for doc in self._docs.values():
             if _matches(doc, filtro):
                 return dict(doc)
         return None
 
-    def find(self, filtro=None):
+    def find(self, filtro=None, projection=None):
         return FakeCursor(dict(d) for d in self._docs.values() if _matches(d, filtro))
 
     def update_one(self, filtro, update, upsert=False):
@@ -68,6 +68,13 @@ class FakeCollection:
                 if "$inc" in update:
                     for k, v in update["$inc"].items():
                         doc[k] = doc.get(k, 0) + v
+                if "$push" in update:
+                    for k, v in update["$push"].items():
+                        doc[k] = list(doc.get(k, [])) + [v]
+                if "$addToSet" in update:
+                    for k, v in update["$addToSet"].items():
+                        actual = list(doc.get(k, []))
+                        doc[k] = actual if v in actual else actual + [v]
                 return type("Result", (), {"matched_count": 1, "modified_count": 1})()
         if upsert:
             doc = dict(filtro)

@@ -135,6 +135,12 @@ class BaseDatosMultiTenant:
     def get_collection(self, nombre, *args, **kwargs):
         return getattr(self, nombre)
 
+    # mongo.db["coleccion"] — mismo aislamiento que mongo.db.coleccion. Sin
+    # esto, el borrado en cascada de empleados (empleados/logic.py) tronaba
+    # después de borrar al empleado y dejaba sus datos hijos huérfanos.
+    def __getitem__(self, nombre):
+        return getattr(self, nombre)
+
     def command(self, *args, **kwargs):
         return self._db.command(*args, **kwargs)
 

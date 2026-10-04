@@ -57,7 +57,7 @@ def setup_documentosfinancieros_routes(app, mongo):
         role = identity.get('role') if isinstance(identity, dict) else None
         own_empleado_id = identity.get('empleado_id') if isinstance(identity, dict) else None
 
-        if role in ('ADMIN', 'SUPER_ADMIN'):
+        if role in ('ADMIN', 'SUPER_ADMIN', 'RH'):
             return delete_documento(mongo, doc_id)
 
         if role == 'EMPLOYEE':

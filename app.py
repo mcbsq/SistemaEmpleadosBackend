@@ -59,7 +59,7 @@ def handle_preflight():
         response = app.make_default_options_response()
         response.headers["Access-Control-Allow-Origin"] = CORS_ORIGINS
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Universo"
         return response
 
 
@@ -81,8 +81,18 @@ def cargar_org_id():
         claims = get_jwt()
         if claims:
             g.org_id = claims.get("org_id")
+            # Modo soporte: la cuenta suprema de la plataforma puede ver el
+            # universo de otra empresa mandando X-Universo. Solo lectura.
+            universo = (request.headers.get("X-Universo") or "").strip().lower()
+            if universo and universo != g.org_id:
+                from api.tenants.routes import es_operador_plataforma
+                if es_operador_plataforma(claims):
+                    g.org_id = universo
+                    g.modo_soporte = True
     except Exception:
         pass
+    if getattr(g, "modo_soporte", False) and request.method not in ("GET", "HEAD", "OPTIONS"):
+        return jsonify({"error": "Estás viendo esta empresa en modo soporte (solo lectura). Sal del modo soporte para hacer cambios."}), 403
 
 
 # ─── Configuración obligatoria por variable de entorno ─────────────────────
@@ -216,6 +226,10 @@ from api.conexiones_externas.routes    import setup_conexiones_externas_routes
 from api.tenants.routes                import setup_tenants_routes
 from api.leads.routes                  import setup_leads_routes
 from api.payroll.routes                import setup_payroll_routes
+from api.perfil.routes                 import setup_perfil_routes
+from api.solicitudes_rh.routes         import setup_solicitudes_rh_routes
+from api.panel_rh.routes               import setup_panel_rh_routes
+from api.importacion.routes            import setup_importacion_routes
 
 setup_login_routes(app, mongo)
 setup_usuario_routes(app, mongo)
@@ -248,6 +262,10 @@ setup_conexiones_externas_routes(app, mongo)
 setup_tenants_routes(app, mongo)
 setup_leads_routes(app)
 setup_payroll_routes(app, mongo)
+setup_perfil_routes(app, mongo)
+setup_solicitudes_rh_routes(app, mongo)
+setup_panel_rh_routes(app, mongo)
+setup_importacion_routes(app, mongo)
 
 
 @app.route('/health')

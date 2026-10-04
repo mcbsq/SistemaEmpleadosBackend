@@ -1,6 +1,7 @@
 from flask import request
 from .logic import create_datoscontacto, get_datoscontacto_by_empleado, get_datoscontactos, delete_datoscontacto, update_datoscontacto
 from api.auth_decorators import require_roles, require_self_or_roles
+from core.aviso_cambios import avisar_rh
 
 
 def setup_datoscontacto_routes(app, mongo):
@@ -32,6 +33,7 @@ def setup_datoscontacto_routes(app, mongo):
 
     @app.route('/datoscontacto/empleado/<empleado_id>', methods=['PUT'])
     @require_self_or_roles('empleado_id', 'ADMIN', 'SUPER_ADMIN')
+    @avisar_rh(mongo, 'contacto')
     def update_datoscontacto_route(empleado_id):
         TelFijo = request.json.get('TelFijo', '')
         TelCelular = request.json.get('TelCelular', '')

@@ -3,6 +3,7 @@ from flask_jwt_extended import get_jwt
 from .logic import (create_rh, get_rhs, get_rh_by_empleado_id, delete_rh_by_empleado_id, update_rh)
 from api.auth_decorators import require_roles, require_self_or_roles
 from core.permissions import require_roles_or_permission
+from core.visibilidad_perfil import require_seccion
 
 
 def setup_rh_routes(app, mongo):
@@ -23,12 +24,13 @@ def setup_rh_routes(app, mongo):
         role = identity.get('role') if isinstance(identity, dict) else None
         return get_rhs(mongo, role=role)
 
-    # Puesto, jefe y horario son datos administrados por RH, no autoeditables,
-    # pero el propio empleado sí puede consultarlos.
+    # Puesto, jefe y horario son datos administrados por RH, no autoeditables.
+    # Los ven: el propio empleado, RH, su jefe directo y Contador; salarios y
+    # bancarios se recortan/enmascaran según core/visibilidad_perfil.py.
     @app.route('/rh/<empleado_id>', methods=['GET'])
-    @require_self_or_roles('empleado_id', 'ADMIN', 'SUPER_ADMIN')
+    @require_seccion(mongo, 'laboral')
     def get_rh_by_empleado_id_route(empleado_id):
-        return get_rh_by_empleado_id(mongo, empleado_id)
+        return get_rh_by_empleado_id(mongo, empleado_id, identity=get_jwt())
 
     @app.route('/rh/<empleado_id>', methods=['DELETE'])
     @require_roles('ADMIN', 'SUPER_ADMIN')

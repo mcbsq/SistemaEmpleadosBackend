@@ -2,6 +2,7 @@ from flask import request
 from .logic import (create_educacion, get_educacion_by_empleado, delete_educacion, update_educacion, get_educacion)
 from api.auth_decorators import require_roles, require_self_or_roles
 from core.permissions import require_roles_or_permission
+from core.visibilidad_perfil import require_seccion
 
 
 def setup_educacion_routes(app, mongo):
@@ -12,8 +13,10 @@ def setup_educacion_routes(app, mongo):
         empleado_id = data.get('empleado_id')
         return create_educacion(mongo, empleado_id, data)
 
+    # Formación, experiencia y habilidades son el "CV" del perfil: cualquier
+    # compañero de la misma empresa puede verlo (sección "profesional").
     @app.route('/educacion/empleado/<empleado_id>', methods=['GET'])
-    @require_self_or_roles('empleado_id', 'ADMIN', 'SUPER_ADMIN')
+    @require_seccion(mongo, 'profesional')
     def get_educacion_by_empleado_route(empleado_id):
         return get_educacion_by_empleado(mongo, empleado_id)
 

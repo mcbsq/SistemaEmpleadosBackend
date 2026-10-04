@@ -30,6 +30,10 @@ PERMISOS_DEFAULT = {
                         "ver_organigrama", "ver_dashboard", "ver_carrusel"],
     "MEDICO":          ["ver_empleados", "ver_expediente", "ver_organigrama",
                         "ver_dashboard", "ver_carrusel"],
+    # Recursos Humanos: todo lo de personas, nada de sistema.
+    "RH":              ["ver_empleados", "crud_empleados", "ver_expediente", "ver_rh",
+                        "ver_proyectos", "ver_organigrama", "ver_habilidades",
+                        "ver_dashboard", "ver_carrusel", "ver_perfil_equipo"],
 }
 
 DASHBOARD_MODULOS = {
@@ -40,6 +44,7 @@ DASHBOARD_MODULOS = {
     "CONTADOR":        ["dashboard_contador", "home_carousel", "organigrama"],
     "PROJECT_MANAGER": ["dashboard_pm", "home_carousel", "organigrama"],
     "MEDICO":          ["dashboard_medico", "home_carousel", "organigrama"],
+    "RH":              ["dashboard_rh", "home_carousel", "organigrama"],
 }
 
 _ROLES_SISTEMA = set(PERMISOS_DEFAULT.keys())
@@ -88,7 +93,7 @@ def require_roles_or_permission(mongo, permiso, *roles_sistema):
         def wrapper(*args, **kwargs):
             identity = get_jwt()
             role = identity.get("role") if isinstance(identity, dict) else None
-            if role in roles_sistema:
+            if role in roles_sistema or (role == "RH" and "ADMIN" in roles_sistema):
                 return f(*args, **kwargs)
             if role not in _ROLES_SISTEMA:
                 permisos = get_permisos_for_role(mongo, role)
@@ -114,7 +119,7 @@ def require_permission(mongo, *permisos_validos):
         def wrapper(*args, **kwargs):
             identity = get_jwt()
             role = identity.get("role") if isinstance(identity, dict) else None
-            if role in ("ADMIN", "SUPER_ADMIN"):
+            if role in ("ADMIN", "SUPER_ADMIN", "RH"):
                 return f(*args, **kwargs)
             permisos = get_permisos_for_role(mongo, role)
             if "*" in permisos or any(p in permisos for p in permisos_validos):

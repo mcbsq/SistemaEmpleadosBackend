@@ -10,6 +10,7 @@ from .logic import (
 )
 from api.auth_decorators import require_roles, require_self_or_roles
 from core.permissions import require_roles_or_permission
+from core.aviso_cambios import avisar_rh
 
 # Dato sensible (salud) — se trata con el criterio más estricto de todo el
 # proyecto: EMPLOYEE solo puede tocar su propio expediente, nunca el de
@@ -55,6 +56,7 @@ def setup_expedienteclinico_routes(app, mongo):
 
     @app.route('/expedienteclinico/empleado/<empleado_id>', methods=['PUT'])
     @require_self_or_roles('empleado_id', 'ADMIN', 'SUPER_ADMIN')
+    @avisar_rh(mongo, 'clinico')
     def update_expediente_route(empleado_id):
         data = request.get_json(silent=True) or {}
         return update_expedienteclinico_empleado(mongo, empleado_id, data)

@@ -9,6 +9,19 @@ from functools import wraps
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt
 
+# Rol RH (Recursos Humanos, oct 2026): administra PERSONAS — empleados,
+# expedientes, vacaciones, nómina, reclutamiento, solicitudes — con alcance de
+# toda la empresa. Hereda todo lo que una ruta le permite a ADMIN, pero nunca
+# lo que es solo de SUPER_ADMIN (configuración, roles, cuentas, integraciones).
+ROL_RH = "RH"
+
+
+def rol_permitido(role, allowed_roles):
+    """True si `role` está en allowed_roles, contando a RH como ADMIN."""
+    if role in allowed_roles:
+        return True
+    return role == ROL_RH and "ADMIN" in allowed_roles
+
 
 def require_roles(*allowed_roles):
     """
@@ -21,7 +34,7 @@ def require_roles(*allowed_roles):
         def wrapper(*args, **kwargs):
             identity = get_jwt()
             role = identity.get('role') if isinstance(identity, dict) else None
-            if role not in allowed_roles:
+            if not rol_permitido(role, allowed_roles):
                 return jsonify({"error": "Acceso no autorizado"}), 403
             return f(*args, **kwargs)
         return wrapper
@@ -45,7 +58,7 @@ def require_self_or_roles(id_param, *allowed_roles):
             own_empleado_id = identity.get('empleado_id') if isinstance(identity, dict) else None
             requested_id = kwargs.get(id_param)
 
-            if role in allowed_roles:
+            if rol_permitido(role, allowed_roles):
                 return f(*args, **kwargs)
             if own_empleado_id and requested_id and str(own_empleado_id) == str(requested_id):
                 return f(*args, **kwargs)

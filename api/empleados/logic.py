@@ -107,11 +107,11 @@ def create_empleado(mongo, identity=None):
         resultado = mongo.db.empleados.insert_one(emp)
         emp['_id'] = str(resultado.inserted_id)
 
-        logging.debug(f"✅ Empleado insertado con ID: {emp['_id']}")
+        logging.debug(f"Empleado insertado con ID: {emp['_id']}")
         return jsonify(emp), 201
 
     except Exception as e:
-        logging.error(f"🔥 Error en create_empleado: {str(e)}")
+        logging.error(f"Error en create_empleado: {str(e)}")
         return jsonify({'message': 'Error interno del servidor', 'error': str(e)}), 500
 
 
@@ -184,7 +184,7 @@ def get_empleados(mongo, identity=None):
             })
         return Response(json.dumps(formatted), mimetype="application/json")
     except Exception as e:
-        logging.error(f"🔥 Error en get_empleados: {str(e)}")
+        logging.error(f"Error en get_empleados: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -215,7 +215,7 @@ _COLECCIONES_HIJAS = {
     'rh':                'empleado_id',   # ObjectId
     'direccion':         'empleado_id',   # string
     'datoscontacto':     'EmpleadoId',    # ObjectId
-    'personascontacto':  'empleado_id',   # string
+    'personascontacto':  'empleadoid',    # ObjectId (así lo guarda personascontacto/logic.py)
     'educacion':         'empleado_id',   # ObjectId
     'expedienteclinico': 'empleado_id',   # string
     'redsocial':         'empleado_id',   # string

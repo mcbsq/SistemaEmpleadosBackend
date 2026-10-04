@@ -9,6 +9,9 @@ logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 
+ROLES_QUE_RH_NO_PUEDE_CREAR = {'SUPER_ADMIN', 'ADMIN', 'RH'}
+
+
 def setup_usuario_routes(app, mongo):
 
     @app.route('/usuario', methods=['GET'])
@@ -17,12 +20,18 @@ def setup_usuario_routes(app, mongo):
         return get_usuarios(mongo)
 
     # CRÍTICO — antes sin protección alguna: cualquiera podía crear una
-    # cuenta con "role": "SUPER_ADMIN" sin token. Ahora SUPER_ADMIN
-    # únicamente. Aquí también se asignan las áreas de un ADMIN.
+    # cuenta con "role": "SUPER_ADMIN" sin token. Hoy: SUPER_ADMIN, y RH
+    # (oct 2026) para dar acceso a las personas que contrata — pero RH NUNCA
+    # puede crear cuentas con un rol igual o superior al suyo (ADMIN, RH,
+    # SUPER_ADMIN) ni asignar áreas: eso sería auto-ascenderse.
     @app.route('/usuario', methods=['POST'])
-    @require_roles('SUPER_ADMIN')
+    @require_roles('SUPER_ADMIN', 'RH')
     def create_usuario_route():
         body                 = request.get_json() or {}
+        if get_jwt().get('role') == 'RH':
+            if str(body.get('role') or 'EMPLOYEE').upper() in ROLES_QUE_RH_NO_PUEDE_CREAR:
+                return jsonify({'error': 'Recursos Humanos no puede crear cuentas de administrador. Pídeselo al superadministrador.'}), 403
+            body.pop('areas_administradas', None)
         user                 = body.get('user')
         password             = body.get('password')
         empleado_id          = body.get('empleado_id')

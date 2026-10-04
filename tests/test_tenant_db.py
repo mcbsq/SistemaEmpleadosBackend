@@ -51,3 +51,18 @@ def test_upsert_enforces_tenant_in_filter_and_inserted_document():
 
     assert raw.organizacion.find_one({"org_id": "empresa-a"})["name"] == "A"
     assert raw.organizacion.find_one({"org_id": "empresa-b"}) is None
+
+
+def test_acceso_por_corchetes_aisla_igual_que_por_atributo():
+    from core.tenant_db import BaseDatosMultiTenant
+    class Col:
+        def __init__(self): self.filtros = []
+        def delete_many(self, filtro, *a, **k): self.filtros.append(filtro); return None
+    class DB:
+        rh = Col()
+    import flask
+    app = flask.Flask(__name__)
+    with app.test_request_context():
+        flask.g.org_id = "empresa-a"
+        BaseDatosMultiTenant(DB())["rh"].delete_many({"empleado_id": 1})
+    assert DB.rh.filtros == [{"empleado_id": 1, "org_id": "empresa-a"}]
