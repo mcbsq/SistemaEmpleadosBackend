@@ -62,7 +62,9 @@ def setup_perfil_routes(app, mongo):
             'ApelMaterno':      emp.get('ApelMaterno', ''),
             'Fotografias':      [f for f in [_foto(emp)] if f],
             'Puesto':           rh.get('Puesto', ''),
-            'Departamento':     rh.get('Departamento', ''),
+            # El área vive en dos lugares por historia (ficha laboral y
+            # empleados.depto_id); si la ficha no la tiene, se usa la otra.
+            'Departamento':     rh.get('Departamento') or (emp.get('depto_id') if str(emp.get('depto_id') or '').strip().lower() != 'sin asignar' else '') or '',
             'JefeInmediato':    rh.get('JefeInmediato', ''),
             'JefeInmediato_id': _str_id(rh.get('JefeInmediato_id')),
             # El correo de la cuenta de acceso es el de trabajo; los correos
