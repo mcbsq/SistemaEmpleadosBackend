@@ -103,7 +103,7 @@ def setup_tenants_routes(app, mongo):
         def contar(col, extra=None):
             pipeline = [{"$match": extra or {}}, {"$group": {"_id": "$org_id", "n": {"$sum": 1}}}]
             return {d["_id"]: d["n"] for d in raw[col].aggregate(pipeline)}
-        empleados = contar("empleados", {"estado": {"$ne": "pendiente"}})
+        empleados = contar("empleados", {"estado": {"$nin": ["pendiente", "baja"]}})
         usuarios = contar("usuario")
         solicitudes = contar("solicitudes_rh", {"estado": {"$in": ["abierta", "en_proceso"]}})
         ultima = {d["_id"]: d["f"] for d in raw.auditoria.aggregate([{"$group": {"_id": "$org_id", "f": {"$max": "$creado_en"}}}])}

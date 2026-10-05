@@ -43,7 +43,7 @@ def verificar_fechas_especiales(mongo):
         admins = _admins_y_super(mongo)
 
         # ── Cumpleaños ──────────────────────────────────────────────────
-        for emp in mongo.db.empleados.find({"estado": {"$ne": "pendiente"}}):
+        for emp in mongo.db.empleados.find({"estado": {"$nin": ["pendiente", "baja"]}}):
             fec = emp.get("FecNacimiento")
             if not fec:
                 continue

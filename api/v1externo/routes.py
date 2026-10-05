@@ -68,7 +68,7 @@ def setup_v1_externo_routes(app, mongo):
     @app.route('/api/v1/empleados/fiscal-sif', methods=['GET'])
     @require_api_key(mongo, 'empleados:read')
     def v1_get_empleados_fiscal_sif_route():
-        empleados = mongo.db.empleados.find({"estado": {"$ne": "pendiente"}})
+        empleados = mongo.db.empleados.find({"estado": {"$nin": ["pendiente", "baja"]}})
         return jsonify({"empleados": [empleado_fiscal_sif(emp) for emp in empleados]}), 200
 
     @app.route('/api/v1/rh', methods=['GET'])

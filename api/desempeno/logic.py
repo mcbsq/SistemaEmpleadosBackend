@@ -101,7 +101,7 @@ def crear_ciclo(mongo, data, identity):
 
     # Genera una evaluación (vacía) por cada empleado activo — así ni el
     # empleado ni el jefe tienen que "crear" nada, solo llenar lo que ya existe.
-    empleados = list(mongo.db.empleados.find({"estado": {"$ne": "pendiente"}}, {"_id": 1}))
+    empleados = list(mongo.db.empleados.find({"estado": {"$nin": ["pendiente", "baja"]}}, {"_id": 1}))
     if empleados:
         ahora = datetime.now(timezone.utc).isoformat()
         mongo.db.evaluaciones.insert_many([

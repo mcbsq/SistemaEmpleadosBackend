@@ -143,7 +143,7 @@ def _empleado_ids_super_admin(mongo):
 
 def get_empleados(mongo, identity=None):
     try:
-        query = {"estado": {"$ne": "pendiente"}}
+        query = {"estado": {"$nin": ["pendiente", "baja"]}}
 
         role = identity.get('role') if isinstance(identity, dict) else None
         if role == 'ADMIN':
@@ -304,7 +304,7 @@ def update_empleado(id, mongo, identity=None):
 
 def get_empleados_sin_pendientes(mongo):
     try:
-        empleados = list(mongo.db.empleados.find({"estado": {"$ne": "pendiente"}}))
+        empleados = list(mongo.db.empleados.find({"estado": {"$nin": ["pendiente", "baja"]}}))
         return empleados
     except Exception as e:
         logging.error(f"Error en get_empleados_sin_pendientes: {e}")

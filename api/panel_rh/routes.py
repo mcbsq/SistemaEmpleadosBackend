@@ -57,7 +57,7 @@ def setup_panel_rh_routes(app, mongo):
             {"role": {"$in": ["SUPER_ADMIN", "ADMIN"]}}, {"empleado_id": 1}) if u.get("empleado_id")}
         empleados = [e for e in mongo.db.empleados.find({}, {
             "Nombre": 1, "ApelPaterno": 1, "estado": 1, "FecNacimiento": 1, "Fotografias": 1,
-        }) if (e.get("estado") or "activo") != "pendiente" and str(e["_id"]) not in administrativos]
+        }) if (e.get("estado") or "activo") not in ("pendiente", "baja") and str(e["_id"]) not in administrativos]
         activos = [e for e in empleados if (e.get("estado") or "activo") != "inactivo"]
         nombre = {str(e["_id"]): f"{e.get('Nombre', '')} {e.get('ApelPaterno', '')}".strip() for e in empleados}
         rh = {str(d.get("empleado_id")): d for d in mongo.db.rh.find({}, {"ExpedienteDigitalPDF": 0})}

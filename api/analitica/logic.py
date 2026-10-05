@@ -73,7 +73,7 @@ def resumen_sistema(mongo, identity):
 
     if _puede(role, permisos, "headcount"):
         pipeline = [
-            {"$match": {"estado": {"$ne": "pendiente"}}},
+            {"$match": {"estado": {"$nin": ["pendiente", "baja"]}}},
             {"$group": {"_id": {"$ifNull": ["$depto_id", "Sin asignar"]}, "total": {"$sum": 1}}},
             {"$sort": {"total": -1}},
         ]
@@ -129,6 +129,13 @@ def resumen_sistema(mongo, identity):
                 "promedio_jefe": round(sum(jefeevals) / len(jefeevals), 2) if jefeevals else None,
                 "completadas": len(autoevals), "total": total_evs,
             }
+
+    if _puede(role, permisos, "rotacion"):
+        from api.bajas.logic import rotacion
+        datos = rotacion(mongo)
+        resumen["rotacion"] = {k: datos[k] for k in (
+            "desde", "hasta", "plantilla_inicial", "plantilla_final", "altas", "bajas",
+            "rotacion_pct", "por_mes", "por_area", "por_tipo")}
 
     if es_admin:
         vacantes_abiertas = mongo.db.vacantes.count_documents({"estado": "abierta"})

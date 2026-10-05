@@ -74,6 +74,8 @@ def setup_perfil_routes(app, mongo):
             'NombrePreferido':  emp.get('NombrePreferido', ''),
             'Titular':          emp.get('Titular', ''),
             'estado':           emp.get('estado', 'activo'),
+            # Los datos de la salida (motivo incluido) solo los ve RH.
+            'baja':             emp.get('baja') if emp.get('estado') == 'baja' and get_jwt().get('role') in ROLES_RH else None,
         }), 200
 
     # Ajustes de perfil (estilo red social): lo que el propio empleado decide

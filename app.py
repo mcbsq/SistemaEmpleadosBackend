@@ -228,6 +228,7 @@ from api.leads.routes                  import setup_leads_routes
 from api.payroll.routes                import setup_payroll_routes
 from api.perfil.routes                 import setup_perfil_routes
 from api.dispositivos.routes           import setup_dispositivos_routes
+from api.bajas.routes                  import setup_bajas_routes
 from api.solicitudes_rh.routes         import setup_solicitudes_rh_routes
 from api.panel_rh.routes               import setup_panel_rh_routes
 from api.importacion.routes            import setup_importacion_routes
@@ -265,6 +266,7 @@ setup_leads_routes(app)
 setup_payroll_routes(app, mongo)
 setup_perfil_routes(app, mongo)
 setup_dispositivos_routes(app, mongo)
+setup_bajas_routes(app, mongo)
 setup_solicitudes_rh_routes(app, mongo)
 setup_panel_rh_routes(app, mongo)
 setup_importacion_routes(app, mongo)

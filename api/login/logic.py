@@ -107,6 +107,11 @@ def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_pa
     Mongo — así una cuenta legacy sin org_id migrado igual queda con el
     tenant correcto en el JWT desde el primer login post-migración.
     """
+    # Cuenta desactivada (p. ej. el empleado fue dado de baja): no entra,
+    # aunque Aegis todavía acepte su contraseña.
+    if usuario.get("activo") is False:
+        return jsonify({"error": "Tu cuenta está desactivada. Contacta a Recursos Humanos."}), 403
+
     user = usuario.get("user") or login_label
     role = usuario.get("role", "EMPLOYEE")
     empleado_id = str(usuario.get("empleado_id") or "")

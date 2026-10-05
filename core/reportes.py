@@ -27,6 +27,8 @@ CATALOGO_REPORTES = [
     {"id": "vacaciones_uso", "nombre": "Uso de vacaciones", "descripcion": "Quién tiene días por perder, tasa de aprobación y próximas salidas."},
     {"id": "desempeno_resumen", "nombre": "Resumen de desempeño", "descripcion": "Brecha autoevaluación vs. jefe y % de evaluaciones completadas."},
     {"id": "reclutamiento", "nombre": "Reclutamiento", "descripcion": "Conversión por etapa del pipeline y antigüedad de las vacantes abiertas."},
+    {"id": "rotacion", "nombre": "Rotación de personal", "descripcion": "Bajas de los últimos 12 meses con su motivo, % de rotación y plantilla."},
+    {"id": "aguinaldos", "nombre": "Aguinaldos del año", "descripcion": "Aguinaldo de cada empleado (proporcional si no completó el año), con exento, gravado e ISR.", "sensible": True},
 ]
 
 
@@ -76,7 +78,7 @@ def _normalizar_area(valor):
 # ─── 1. Headcount ───────────────────────────────────────────────────────────
 def _datos_headcount(mongo):
     headers = ["Departamento", "Total empleados", "% del total", "Puestos", "Antigüedad promedio (años)"]
-    empleados = list(mongo.db.empleados.find({"estado": {"$ne": "pendiente"}}))
+    empleados = list(mongo.db.empleados.find({"estado": {"$nin": ["pendiente", "baja"]}}))
     total = len(empleados)
     rh_por_emp = {str(r["empleado_id"]): r for r in mongo.db.rh.find()}
 
@@ -154,7 +156,7 @@ def _datos_nomina_resumen(mongo):
 # ─── 3. Vacaciones ──────────────────────────────────────────────────────────
 def _datos_vacaciones_uso(mongo):
     headers = ["Empleado", "Solicitudes", "Días aprobados", "Días pendientes", "Días rechazados", "Días disponibles hoy"]
-    empleados = list(mongo.db.empleados.find({"estado": {"$ne": "pendiente"}}))
+    empleados = list(mongo.db.empleados.find({"estado": {"$nin": ["pendiente", "baja"]}}))
     nombre_por_id = {str(e["_id"]): _nombre_empleado(e) for e in empleados}
 
     resumen_por_emp = {}
@@ -290,12 +292,54 @@ def _datos_reclutamiento(mongo):
     return headers, rows, resumen
 
 
+# ─── Rotación ───────────────────────────────────────────────────────────────
+def _datos_rotacion(mongo):
+    from api.bajas.logic import rotacion
+    datos = rotacion(mongo)
+    headers = ["Empleado", "Área", "Puesto", "Ingreso", "Baja", "Antigüedad (años)", "Tipo", "Motivo", "Recontratable"]
+    rows = [[b["nombre"], b["area"], b["puesto"], b["ingreso"] or "", b["fecha"], b["antiguedad_anios"] or "",
+             b["tipo_label"], b["motivo"], "Sí" if b["recontratable"] else "No"] for b in datos["bajas_detalle"]]
+    resumen = {
+        "Periodo": f"{datos['desde']} a {datos['hasta']}",
+        "Plantilla inicial": datos["plantilla_inicial"],
+        "Plantilla final": datos["plantilla_final"],
+        "Altas": datos["altas"],
+        "Bajas": datos["bajas"],
+        "Rotación del periodo (%)": datos["rotacion_pct"],
+    }
+    return headers, rows, resumen
+
+
+# ─── Aguinaldos ─────────────────────────────────────────────────────────────
+def _datos_aguinaldos(mongo):
+    from datetime import datetime, timezone
+    from api.nomina.logic import reporte_aguinaldos
+    anio = datetime.now(timezone.utc).year
+    resp, _ = reporte_aguinaldos(mongo, anio)
+    datos = resp.get_json()
+    headers = ["Empleado", "Área", "Salario diario", "Días trabajados", "Días a pagar", "Aguinaldo", "Exento", "Gravado", "ISR", "Neto"]
+    rows = [[e["nombre"], e["area"], e["salario_diario"], e["dias_trabajados"], e["dias_a_pagar"], e["monto"],
+             e["exento"], e["gravado"], e["isr"], e["neto"]] for e in datos["empleados"]]
+    t = datos["totales"]
+    resumen = {
+        "Año": anio,
+        "Días de aguinaldo (año completo)": datos["dias_aguinaldo"],
+        "Total aguinaldos": t["monto"],
+        "ISR estimado": t["isr"],
+        "Neto a pagar": t["neto"],
+        "Empleados sin salario registrado": len(datos["sin_salario"]),
+    }
+    return headers, rows, resumen
+
+
 DATOS_GENERADORES = {
     "headcount": _datos_headcount,
     "nomina_resumen": _datos_nomina_resumen,
     "vacaciones_uso": _datos_vacaciones_uso,
     "desempeno_resumen": _datos_desempeno_resumen,
     "reclutamiento": _datos_reclutamiento,
+    "rotacion": _datos_rotacion,
+    "aguinaldos": _datos_aguinaldos,
 }
 
 
