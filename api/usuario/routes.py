@@ -1,4 +1,6 @@
-from flask import request, jsonify
+from flask import request, jsonify, g
+from bson.objectid import ObjectId
+from bson.errors import InvalidId
 from flask_jwt_extended import get_jwt
 from .logic import (create_usuario, get_usuarios, get_usuario,
                     delete_usuario, update_usuario, usuario_existente)
@@ -13,6 +15,12 @@ ROLES_QUE_RH_NO_PUEDE_CREAR = {'SUPER_ADMIN', 'ADMIN', 'RH'}
 
 
 def setup_usuario_routes(app, mongo):
+
+    def _cuenta_por_id(id):
+        try:
+            return mongo.db.usuario.find_one({'_id': ObjectId(id)})
+        except (InvalidId, TypeError):
+            return None
 
     @app.route('/usuario', methods=['GET'])
     @require_roles('SUPER_ADMIN')
@@ -66,10 +74,23 @@ def setup_usuario_routes(app, mongo):
         password             = data.get('password')
         role                 = data.get('role')
         areas_administradas  = data.get('areas_administradas')
-        return update_usuario(mongo, id, user, password, role,
+        antes = _cuenta_por_id(id)
+        resp = update_usuario(mongo, id, user, password, role,
                                areas_administradas=areas_administradas, identity=get_jwt())
+        status = resp[1] if isinstance(resp, tuple) else getattr(resp, 'status_code', 200)
+        if antes and status == 200 and (password or (role and role != antes.get('role'))):
+            # Contraseña restablecida o rol distinto: sus celulares de
+            # confianza vuelven a pedir login (la sesión llevaba el rol viejo).
+            from api.dispositivos.logic import revocar_de_usuario
+            revocar_de_usuario(mongo, antes.get('user'), g.org_id, 'restablecimiento o cambio de rol')
+        return resp
 
     @app.route('/usuario/<id>', methods=['DELETE'])
     @require_roles('SUPER_ADMIN')
     def delete_usuario_route(id):
-        return delete_usuario(mongo, id)
+        antes = _cuenta_por_id(id)
+        resp = delete_usuario(mongo, id)
+        if antes:
+            from api.dispositivos.logic import revocar_de_usuario
+            revocar_de_usuario(mongo, antes.get('user'), g.org_id, 'cuenta eliminada')
+        return resp
