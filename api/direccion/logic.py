@@ -1,3 +1,4 @@
+import re
 from flask import jsonify, request, Response
 from bson import json_util
 from bson.objectid import ObjectId
@@ -16,11 +17,37 @@ def _serialize(doc):
     return doc
 
 
+ETIQUETAS = {
+    'Calle': 'la calle', 'NumExterior': 'el número exterior (o "S/N")', 'NumInterior': 'el número interior',
+    'Colonia': 'la colonia', 'Manzana': 'la manzana', 'Lote': 'el lote', 'Municipio': 'el municipio',
+    'Ciudad': 'la ciudad o estado', 'CodigoP': 'el código postal',
+}
+
+
+def validar_direccion(mongo, data, antes=None):
+    """Campos obligatorios según la configuración de la empresa. Si el
+    domicilio no cambió, no se valida (no bloquear al editar otra cosa)."""
+    from api.org.logic import get_campos_direccion
+    if antes is not None and all(str(data.get(k) or '') == str(antes.get(k) or '') for k in ETIQUETAS):
+        return {}
+    errores = {}
+    for campo, regla in get_campos_direccion(mongo).items():
+        if regla == 'obligatorio' and not str(data.get(campo) or '').strip():
+            errores[campo] = f'Falta {ETIQUETAS.get(campo, campo)}.'
+    cp = str(data.get('CodigoP') or '').strip()
+    if cp and not re.fullmatch(r'\d{5}', cp):
+        errores['CodigoP'] = 'El código postal tiene 5 dígitos.'
+    return errores
+
+
 def create_direccion(mongo):
     try:
         data = request.json
         if not data:
             return jsonify({'message': 'No se recibieron datos'}), 400
+        errores = validar_direccion(mongo, data)
+        if errores:
+            return jsonify({'error': 'Completa el domicilio.', 'campos': errores}), 400
 
         id_insertado = mongo.db.direccion.insert_one({
             'Calle':       data.get('Calle'),
@@ -28,6 +55,7 @@ def create_direccion(mongo):
             'NumInterior': data.get('NumInterior'),
             'Manzana':     data.get('Manzana'),
             'Lote':        data.get('Lote'),
+            'Colonia':     data.get('Colonia'),
             'Municipio':   data.get('Municipio'),
             'Ciudad':      data.get('Ciudad'),
             'CodigoP':     data.get('CodigoP'),
@@ -114,6 +142,10 @@ def update_direccion_by_empleado(mongo, empleado_id):
     """
     try:
         data = request.json or {}
+        antes = mongo.db.direccion.find_one({'empleado_id': empleado_id}) or {}
+        errores = validar_direccion(mongo, data, antes)
+        if errores:
+            return jsonify({'error': 'Completa el domicilio.', 'campos': errores}), 400
 
         payload = {
             'Calle':       data.get('Calle',       ''),
@@ -121,6 +153,7 @@ def update_direccion_by_empleado(mongo, empleado_id):
             'NumInterior': data.get('NumInterior',  ''),
             'Manzana':     data.get('Manzana',      ''),
             'Lote':        data.get('Lote',         ''),
+            'Colonia':     data.get('Colonia',      ''),
             'Municipio':   data.get('Municipio',    ''),
             'Ciudad':      data.get('Ciudad',       ''),
             'CodigoP':     data.get('CodigoP',      ''),

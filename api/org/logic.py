@@ -65,6 +65,15 @@ DEFAULT_CONFIG = {
     # empresas. Cada SUPER_ADMIN decide la suya desde Configuración; el
     # criterio de seguridad de una empresa no debe imponerse a otra.
     "sessionMinutes": 30,
+    # Roles de sistema que esta empresa no usa: no se ofrecen al asignar
+    # roles ni se listan en Gestión de roles (no se borran: siguen existiendo).
+    "roles_ocultos": [],
+    # Qué datos de domicilio pide la empresa: obligatorio | opcional | oculto.
+    "campos_direccion": {
+        "Calle": "obligatorio", "NumExterior": "obligatorio", "NumInterior": "opcional",
+        "Colonia": "obligatorio", "Manzana": "opcional", "Lote": "opcional",
+        "Municipio": "obligatorio", "Ciudad": "obligatorio", "CodigoP": "obligatorio",
+    },
     # ── Reglas de negocio configurables ──
     "vacaciones": {
         "tabla_dias_por_antiguedad": DEFAULT_TABLA_VACACIONES,
@@ -123,6 +132,23 @@ def update_config(mongo, org_id, updates):
             return jsonify({"error": "Cuerpo inválido"}), 400
         updates.pop("_id", None)
         updates.pop("org_id", None)
+        logo = updates.get("logo")
+        if logo is not None:
+            # Se guarda como data URL (PNG/JPG/WebP/SVG) ya reducido por el cliente.
+            if not isinstance(logo, str) or not logo.startswith(("data:image/png", "data:image/jpeg", "data:image/webp", "data:image/svg+xml")):
+                return jsonify({"error": "El logo debe ser una imagen PNG, JPG, WebP o SVG."}), 400
+            if len(logo) > 400_000:
+                return jsonify({"error": "El logo es demasiado grande (máximo ~300 KB)."}), 400
+        ocultos = updates.get("roles_ocultos")
+        if ocultos is not None:
+            if not isinstance(ocultos, list):
+                return jsonify({"error": "roles_ocultos debe ser una lista"}), 400
+            # Las cuentas de administración no se pueden ocultar.
+            updates["roles_ocultos"] = [r for r in ocultos if r not in ("SUPER_ADMIN", "ADMIN", "RH", "EMPLOYEE")]
+        campos = updates.get("campos_direccion")
+        if campos is not None:
+            if not isinstance(campos, dict) or any(v not in ("obligatorio", "opcional", "oculto") for v in campos.values()):
+                return jsonify({"error": "Cada campo debe ser obligatorio, opcional u oculto"}), 400
         mongo.db.organizacion.update_one(
             {"org_id": org_id}, {"$set": updates}, upsert=True
         )
@@ -151,3 +177,9 @@ def get_session_minutes(mongo, org_id):
         return max(5, min(int(minutes), 1440))
     except (TypeError, ValueError):
         return DEFAULT_CONFIG["sessionMinutes"]
+
+
+def get_campos_direccion(mongo):
+    """Configuración de campos de domicilio de la empresa en curso."""
+    doc = mongo.db.organizacion.find_one({}) or {}
+    return _merge_deep(DEFAULT_CONFIG["campos_direccion"], doc.get("campos_direccion") or {})

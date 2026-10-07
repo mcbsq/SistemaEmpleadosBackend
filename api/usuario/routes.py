@@ -83,6 +83,9 @@ def setup_usuario_routes(app, mongo):
             # confianza vuelven a pedir login (la sesión llevaba el rol viejo).
             from api.dispositivos.logic import revocar_de_usuario
             revocar_de_usuario(mongo, antes.get('user'), g.org_id, 'restablecimiento o cambio de rol')
+        if antes and status == 200 and password:
+            from api.login.sesion import marcar_atendida
+            marcar_atendida(mongo, antes.get('user'), g.org_id)
         return resp
 
     @app.route('/usuario/<id>', methods=['DELETE'])

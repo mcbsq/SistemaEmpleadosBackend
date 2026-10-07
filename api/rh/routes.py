@@ -1,5 +1,5 @@
-from flask import request
-from flask_jwt_extended import get_jwt
+from flask import request, jsonify
+from flask_jwt_extended import get_jwt, jwt_required
 from .logic import (create_rh, get_rhs, get_rh_by_empleado_id, delete_rh_by_empleado_id, update_rh)
 from api.auth_decorators import require_roles, require_self_or_roles
 from core.permissions import require_roles_or_permission
@@ -7,6 +7,19 @@ from core.visibilidad_perfil import require_seccion
 
 
 def setup_rh_routes(app, mongo):
+
+    # Catálogo de bancos SPEI; con ?clabe= dice de qué banco es esa CLABE
+    # y si es válida (para mostrarlo mientras se captura).
+    @app.route('/bancos', methods=['GET'])
+    @jwt_required()
+    def bancos_route():
+        from core.bancos_mx import catalogo, banco_de_clabe
+        from core.validadores_mx import validar_clabe, normalizar
+        clabe = normalizar(request.args.get('clabe', ''))
+        if clabe:
+            return jsonify({'clabe': clabe, 'banco': banco_de_clabe(clabe), 'error': validar_clabe(clabe)}), 200
+        return jsonify(catalogo()), 200
+
     @app.route('/rh', methods=['POST'])
     @require_roles('ADMIN', 'SUPER_ADMIN')
     def create_rh_route():

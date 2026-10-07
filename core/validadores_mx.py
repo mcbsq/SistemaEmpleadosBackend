@@ -72,10 +72,25 @@ def validar_clabe(valor):
         return None
     if not re.fullmatch(r"\d{18}", clabe):
         return "La CLABE debe tener 18 dígitos."
+    # 000… pasa el dígito de control, pero ningún banco usa la clave 000.
+    if clabe[:3] == "000" or len(set(clabe)) == 1:
+        return "Esa CLABE no corresponde a ningún banco; revisa que esté bien copiada."
     pesos = (3, 7, 1) * 6
     suma = sum((int(c) * pesos[i]) % 10 for i, c in enumerate(clabe[:17]))
     if (10 - suma % 10) % 10 != int(clabe[17]):
         return "El dígito de control de la CLABE no coincide; revisa que esté bien copiada."
+    return None
+
+
+def validar_cuenta(valor):
+    """Número de cuenta bancaria: 8 a 18 dígitos, sin valores de relleno."""
+    cuenta = _limpio(valor)
+    if not cuenta:
+        return None
+    if not re.fullmatch(r"\d{8,18}", cuenta):
+        return "El número de cuenta debe tener entre 8 y 18 dígitos (sin la CLABE)."
+    if len(set(cuenta)) == 1 or cuenta in "01234567890123456789" or cuenta in "98765432109876543210":
+        return "Ese número de cuenta parece de relleno; captura la cuenta real."
     return None
 
 
@@ -84,6 +99,7 @@ VALIDADORES_RH = {
     "RFC":   validar_rfc,
     "NSS":   validar_nss,
     "CLABE": validar_clabe,
+    "CuentaBancaria": validar_cuenta,
 }
 
 

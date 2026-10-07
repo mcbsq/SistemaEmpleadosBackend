@@ -98,6 +98,7 @@ def _filtrar_payload_por_presentes(payload, data):
         'CURP', 'RFC', 'EstadoCivil', 'Nacionalidad', 'Salario',
         'TipoRelacionLaboral', 'NSS', 'SalarioDiario', 'SalarioDiarioIntegrado',
         'Banco', 'CLABE', 'CuentaBancaria',
+        'SDI_manual', 'SDI_motivo', 'SDI_factor', 'PeriodicidadPago',
     )
     out = {'empleado_id': payload['empleado_id']}
     for campo in SIMPLES:
@@ -149,9 +150,12 @@ def update_rh(mongo, empleado_id, rh_data, identity=None):
         if not errores and ({'Puesto', 'Departamento'} & set(cambiados)):
             errores = _validar_puesto_catalogo(mongo, data.get('Departamento', antes.get('Departamento')),
                                                data.get('Puesto', antes.get('Puesto')))
+        if not errores and ({'CLABE', 'Banco'} & set(cambiados)):
+            errores = _validar_banco(data, antes)
+        if not errores:
+            errores = _completar_salarios(mongo, data, antes)
         if errores:
             return jsonify({'error': 'Hay datos con formato inválido.', 'campos': errores}), 400
-        _completar_salarios(data)
         payload = _filtrar_payload_por_presentes(_build_payload(eid, data), data)
         mongo.db.rh.update_one(
             {'empleado_id': eid},
@@ -195,16 +199,83 @@ def _numero(valor):
         return None
 
 
-def _completar_salarios(data):
+PERIODICIDADES = ('semanal', 'catorcenal', 'quincenal', 'mensual')
+
+
+def _validar_banco(data, antes):
+    """La CLABE dice de qué banco es: si el banco capturado es OTRO banco
+    conocido, se avisa; si no se capturó banco, se llena solo."""
+    from core.bancos_mx import BANCOS, banco_capturado, banco_de_clabe
+    clabe = normalizar(data.get('CLABE', antes.get('CLABE')))
+    banco = str(data.get('Banco', antes.get('Banco')) or '').strip()
+    if len(clabe) != 18 or clabe[:3] not in BANCOS:
+        return {}
+    if not banco:
+        data['Banco'] = banco_de_clabe(clabe)
+        return {}
+    capturado = banco_capturado(banco)
+    if capturado and capturado != clabe[:3]:
+        return {'Banco': f'La CLABE es de {banco_de_clabe(clabe)}, no de {banco}. Revisa el banco o la CLABE.'}
+    return {}
+
+
+def factor_integracion(mongo, fecha_ingreso):
+    """
+    Factor de integración del SDI (LSS art. 27): 1 + (días de aguinaldo +
+    días de vacaciones × % de prima vacacional) / 365. Aguinaldo y prima
+    salen de los parámetros de nómina de la empresa; las vacaciones, de su
+    tabla por antigüedad (año de servicio en curso).
+    """
+    from api.nomina.logic import get_parametros
+    from api.org.logic import get_vacaciones_config
+    from api.vacaciones.logic import _antiguedad_anios, _dias_por_antiguedad
+    params = get_parametros(mongo)
+    tabla = get_vacaciones_config(mongo).get('tabla_dias_por_antiguedad') or {}
+    ant = _antiguedad_anios(str(fecha_ingreso or ''))
+    anios = ant[0] if ant else 0
+    vacaciones = _dias_por_antiguedad(anios + 1, tabla) or 12
+    aguinaldo = float(params.get('dias_aguinaldo', 15))
+    prima = float(params.get('prima_vacacional_pct', 25)) / 100
+    return round(1 + (aguinaldo + vacaciones * prima) / 365, 4)
+
+
+def _completar_salarios(mongo, data, antes):
     """
     RH captura el salario DIARIO (la base legal en México). Si no manda el
-    mensual, se calcula (diario × 30.4). El SDI depende del factor de
-    integración (aguinaldo, prima vacacional y prestaciones de cada empresa),
-    así que lo propone el frontend y RH lo confirma — aquí no se inventa.
+    mensual, se calcula (diario × 30.4). El SDI se calcula solo con el factor
+    de integración de la empresa; RH puede fijarlo a mano (p. ej. con
+    prestaciones superiores) solo explicando el motivo.
+    Regresa errores por campo ({} si todo bien).
     """
+    if 'PeriodicidadPago' in data and data['PeriodicidadPago'] not in PERIODICIDADES:
+        return {'PeriodicidadPago': 'Elige semanal, catorcenal, quincenal o mensual.'}
     diario = _numero(data.get('SalarioDiario'))
     if diario and not _numero(data.get('Salario')):
         data['Salario'] = round(diario * DIAS_MES, 2)
+
+    toca_sdi = {'SalarioDiario', 'SalarioDiarioIntegrado', 'FechaIngreso', 'SDI_manual'} & set(data)
+    if not toca_sdi:
+        return {}
+    diario = diario or _numero(antes.get('SalarioDiario'))
+    manual = bool(data.get('SDI_manual', antes.get('SDI_manual', False)))
+    if manual:
+        sdi = _numero(data.get('SalarioDiarioIntegrado', antes.get('SalarioDiarioIntegrado')))
+        motivo = ' '.join(str(data.get('SDI_motivo', antes.get('SDI_motivo')) or '').split())
+        if not sdi:
+            return {'SalarioDiarioIntegrado': 'Captura el SDI.'}
+        if diario and sdi < diario:
+            return {'SalarioDiarioIntegrado': 'El SDI no puede ser menor que el salario diario.'}
+        if len(motivo) < 5:
+            return {'SDI_motivo': 'Explica por qué el SDI se fija a mano (p. ej. prestaciones superiores a la ley).'}
+        data['SDI_manual'], data['SDI_motivo'], data['SDI_factor'] = True, motivo[:200], round(sdi / diario, 4) if diario else None
+        return {}
+    if diario:
+        factor = factor_integracion(mongo, data.get('FechaIngreso', antes.get('FechaIngreso')))
+        data['SalarioDiarioIntegrado'] = round(diario * factor, 2)
+        data['SDI_factor'] = factor
+        data['SDI_manual'] = False
+        data['SDI_motivo'] = ''
+    return {}
 
 
 
@@ -266,6 +337,10 @@ def _build_payload(eid, data):
         'Banco':                str(data.get('Banco', '') or '').strip()[:60],
         'CLABE':                normalizar(data.get('CLABE',   '')),
         'CuentaBancaria':       normalizar(data.get('CuentaBancaria', ''))[:20],
+        'SDI_manual':           bool(data.get('SDI_manual', False)),
+        'SDI_motivo':           str(data.get('SDI_motivo', '') or '')[:200],
+        'SDI_factor':           data.get('SDI_factor'),
+        'PeriodicidadPago':     data.get('PeriodicidadPago') if data.get('PeriodicidadPago') in PERIODICIDADES else 'quincenal',
         'CamposPersonalizados': campos,
         # Régimen: "nomina" y "asimilados" -> la empresa timbra recibo de
         # nómina (lo sube RH); "prestador_servicios" (honorarios) -> el propio

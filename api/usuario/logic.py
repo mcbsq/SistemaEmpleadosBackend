@@ -90,7 +90,18 @@ def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE', email=No
             return jsonify({
                 'error': 'Ese correo ya tiene una cuenta en otra empresa. Un mismo correo no puede pertenecer a más de una empresa.',
             }), 409
-    else:
+    # Dentro de la misma empresa tampoco puede repetirse el correo ni el
+    # usuario: dos cuentas con el mismo correo no sabrían a quién pertenece
+    # el login (antes solo se revisaba contra otras empresas).
+    filtro_dup = [{"user": user.strip()}] + ([{"email": email_clean}] if email_clean else [])
+    repetida = mongo.db.usuario.find_one({"$or": filtro_dup})
+    if repetida:
+        if email_clean and (repetida.get("email") or "").lower() == email_clean:
+            return jsonify({'error': f'Ya existe una cuenta con el correo {email_clean} ({repetida.get("user")}).',
+                            'campos': {'email': 'Este correo ya tiene una cuenta.'}}), 409
+        return jsonify({'error': f'El usuario "{user.strip()}" ya existe; elige otro.',
+                        'campos': {'user': 'Este usuario ya existe.'}}), 409
+    if not s["admin_enabled"]:
         if not password:
             return jsonify({'error': 'La contraseña es obligatoria.'}), 400
         if len(password) < 5:

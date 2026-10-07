@@ -9,6 +9,10 @@ from bson.objectid import ObjectId
 
 def _matches(doc, filtro):
     for k, v in (filtro or {}).items():
+        if k == "$or":
+            if not any(_matches(doc, sub) for sub in v):
+                return False
+            continue
         actual = doc.get(k)
         if isinstance(v, dict) and any(str(op).startswith("$") for op in v):
             for op, opval in v.items():

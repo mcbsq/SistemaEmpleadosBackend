@@ -1,3 +1,4 @@
+import re
 # api/datoscontacto/logic.py
 from flask import jsonify, Response
 from bson import json_util
@@ -8,7 +9,48 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _digitos(tel):
+    return re.sub(r"\D", "", str(tel or ""))
+
+
+def validar_telefonos(TelFijo, TelCelular, IdWhatsApp):
+    """Errores por campo ({} si todo bien). WhatsApp puede ser el mismo
+    número que el celular (es lo normal); celular y fijo no."""
+    errores = {}
+    for campo, valor in (("TelCelular", TelCelular), ("TelFijo", TelFijo), ("IdWhatsApp", IdWhatsApp)):
+        d = _digitos(valor)
+        if d and not 10 <= len(d) <= 15:
+            errores[campo] = "Escribe el número a 10 dígitos (con lada)."
+        elif d and len(set(d)) == 1:
+            errores[campo] = "Ese número no parece real."
+    cel, fijo = _digitos(TelCelular)[-10:], _digitos(TelFijo)[-10:]
+    if cel and fijo and cel == fijo and "TelFijo" not in errores:
+        errores["TelFijo"] = "El teléfono fijo no puede ser el mismo que el celular; déjalo vacío si no tiene."
+    return errores
+
+
+_CORREO_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def validar_correos(lista):
+    """Correos del empleado: formato válido y sin repetir (mayúsculas no cuentan)."""
+    vistos = set()
+    for item in lista or []:
+        email = str((item.get("email") if isinstance(item, dict) else item) or "").strip().lower()
+        if not email:
+            continue
+        if not _CORREO_RE.match(email):
+            return {"ListaCorreos": f'"{email}" no es un correo válido.'}
+        if email in vistos:
+            return {"ListaCorreos": f'El correo {email} está repetido.'}
+        vistos.add(email)
+    return {}
+
+
 def create_datoscontacto(mongo, TelFijo, TelCelular, IdWhatsApp, IdTelegram, ListaCorreos, empleado_id):
+    errores = validar_telefonos(TelFijo, TelCelular, IdWhatsApp) or validar_correos(ListaCorreos)
+    if errores:
+        return jsonify({'error': 'Revisa los datos de contacto.', 'campos': errores}), 400
     try:
         result = mongo.db.datoscontacto.insert_one({
             'EmpleadoId':   ObjectId(empleado_id),
@@ -71,6 +113,9 @@ def delete_datoscontacto(mongo, id):
 
 
 def update_datoscontacto(mongo, empleado_id, TelFijo, TelCelular, IdWhatsApp, IdTelegram, ListaCorreos):
+    errores = validar_telefonos(TelFijo, TelCelular, IdWhatsApp) or validar_correos(ListaCorreos)
+    if errores:
+        return jsonify({'error': 'Revisa los datos de contacto.', 'campos': errores}), 400
     try:
         # FIX: sin upsert=True, un empleado que nunca tuvo datoscontacto
         # creado (nadie llamó create_datoscontacto para él) hacía que este

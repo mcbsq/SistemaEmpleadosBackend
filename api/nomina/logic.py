@@ -39,6 +39,7 @@ PARAMETROS_DEFAULT = {
     "dias_aguinaldo": 15,       # LFT art. 87: mínimo 15; la empresa puede dar más
     "uma_diaria": 113.14,       # UMA vigente (INEGI la publica cada enero): tope de exenciones
     "jornada_horas": 8,         # horas de la jornada diaria: base del salario por hora
+    "prima_vacacional_pct": 25, # LFT art. 80: mínimo 25 %; entra al factor del SDI
     "horas_extra_habilitadas": True,
 }
 
@@ -55,6 +56,7 @@ def get_parametros(mongo, org_id="default"):
         "dias_aguinaldo": doc.get("dias_aguinaldo", PARAMETROS_DEFAULT["dias_aguinaldo"]),
         "uma_diaria": doc.get("uma_diaria", PARAMETROS_DEFAULT["uma_diaria"]),
         "jornada_horas": doc.get("jornada_horas", PARAMETROS_DEFAULT["jornada_horas"]),
+        "prima_vacacional_pct": doc.get("prima_vacacional_pct", PARAMETROS_DEFAULT["prima_vacacional_pct"]),
         "horas_extra_habilitadas": doc.get("horas_extra_habilitadas", PARAMETROS_DEFAULT["horas_extra_habilitadas"]),
         "actualizado_por": doc.get("actualizado_por"),
         "actualizado_en": doc.get("actualizado_en"),
@@ -82,12 +84,15 @@ def guardar_parametros(mongo, org_id, data, identity):
         dias_aguinaldo = float(data.get("dias_aguinaldo", antes["dias_aguinaldo"]))
         uma_diaria = float(data.get("uma_diaria", antes["uma_diaria"]))
         jornada_horas = float(data.get("jornada_horas", antes["jornada_horas"]))
+        prima_vacacional_pct = float(data.get("prima_vacacional_pct", antes["prima_vacacional_pct"]))
     except (TypeError, ValueError):
         return jsonify({"error": "Días de aguinaldo, UMA y jornada deben ser números"}), 400
     if dias_aguinaldo < 15:
         return jsonify({"error": "La ley exige al menos 15 días de aguinaldo"}), 400
     if uma_diaria <= 0:
         return jsonify({"error": "La UMA diaria debe ser mayor a cero"}), 400
+    if prima_vacacional_pct < 25:
+        return jsonify({"error": "La ley exige al menos 25 % de prima vacacional"}), 400
     if not 1 <= jornada_horas <= 8:
         return jsonify({"error": "La jornada diaria debe estar entre 1 y 8 horas"}), 400
     horas_extra_habilitadas = bool(data.get("horas_extra_habilitadas", antes["horas_extra_habilitadas"]))
@@ -102,6 +107,7 @@ def guardar_parametros(mongo, org_id, data, identity):
         "dias_aguinaldo": dias_aguinaldo,
         "uma_diaria": uma_diaria,
         "jornada_horas": jornada_horas,
+        "prima_vacacional_pct": prima_vacacional_pct,
         "horas_extra_habilitadas": horas_extra_habilitadas,
         "actualizado_por": usuario,
         "actualizado_en": datetime.now(timezone.utc).isoformat(),
@@ -147,6 +153,10 @@ def _calcular_otras_deducciones(sueldo_mensual, deducciones):
     return detalle, round(total, 2)
 
 
+# Fracción del mes que cubre cada periodicidad de pago (mes = 30.4 días).
+FACTOR_PERIODO = {"mensual": 1, "quincenal": 0.5, "catorcenal": round(14 / 30.4, 6), "semanal": round(7 / 30.4, 6)}
+
+
 def calcular_nomina(mongo, empleado_id, periodo="mensual", org_id="default", mes=None):
     try:
         eid = ObjectId(empleado_id)
@@ -181,7 +191,7 @@ def calcular_nomina(mongo, empleado_id, periodo="mensual", org_id="default", mes
     percepcion = sueldo_mensual + (horas_extra["monto"] if horas_extra else 0)
     neto_mensual = round(percepcion - total_deducciones, 2)
 
-    factor = 0.5 if periodo == "quincenal" else 1
+    factor = FACTOR_PERIODO.get(periodo, 1)
     resultado = {
         "empleado_id": empleado_id,
         "periodo": periodo,

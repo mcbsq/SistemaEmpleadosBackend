@@ -64,9 +64,10 @@ def test_create_usuario_rejects_an_email_already_used_by_another_company(monkeyp
     assert aegis_calls == []  # nunca debió intentar crear la segunda identidad en Aegis
 
 
-def test_create_usuario_allows_same_email_reused_within_the_same_company(monkeypatch):
-    """El chequeo es cross-empresa, no debe bloquear un alta legítima dentro
-    de la MISMA empresa (ej. recrear tras un borrado previo)."""
+def test_create_usuario_same_email_within_the_company_only_after_deleting(monkeypatch):
+    """Dentro de la misma empresa no puede haber dos cuentas vivas con el
+    mismo correo (oct 2026, pruebas TST); recrearla tras borrar la anterior
+    sí se permite."""
     monkeypatch.setattr("api.usuario.logic.get_aegis_settings", _aegis_settings_stub())
     monkeypatch.setattr(
         "api.usuario.logic.aegis_admin_create_user",
@@ -84,6 +85,13 @@ def test_create_usuario_allows_same_email_reused_within_the_same_company(monkeyp
     app = Flask(__name__)
     with app.test_request_context():
         g.org_id = "herramientas-y-moldes-industriales"
+        response, status = create_usuario(
+            mongo, "bianca2", None, None,
+            role="SUPER_ADMIN", email="bianca@example.com",
+        )
+        assert status == 409
+
+        mongo.db.usuario.delete_one({"user": "otro"})
         response, status = create_usuario(
             mongo, "bianca2", None, None,
             role="SUPER_ADMIN", email="bianca@example.com",

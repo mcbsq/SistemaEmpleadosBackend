@@ -25,6 +25,20 @@ def setup_login_routes(app, mongo):
             logging.error(f"Error en ruta de login: {str(e)}")
             return jsonify({"error": "Error en el servidor"}), 500
 
+    # Sesión deslizante: cambia un token vigente por uno nuevo (ver sesion.py).
+    @app.route('/refresh', methods=['POST'])
+    @jwt_required()
+    def refresh_route():
+        from .sesion import renovar
+        from .logic import _issue_token_response
+        return renovar(mongo, get_jwt(), _issue_token_response)
+
+    @app.route('/recuperar-contrasena', methods=['POST'])
+    def recuperar_route():
+        from .sesion import solicitar_recuperacion
+        ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
+        return solicitar_recuperacion(mongo, request.get_json(silent=True) or {}, ip)
+
     # Cambio de contraseña del propio usuario autenticado. En modo Aegis el
     # cambio ocurre allá (y limpia must_change_password); en legacy, en Mongo.
     @app.route('/change-password', methods=['POST'])

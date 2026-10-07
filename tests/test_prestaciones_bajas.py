@@ -170,11 +170,11 @@ def test_horas_extra_registro_aprobacion_y_nomina_del_mes():
                   headers=_h(app, role="JEFE_AREA", empleado_id="jefe1")).status_code == 403
 
     # Pendiente no se paga; al aprobarla entra a la nómina del mes.
-    calc = c.get(f"/nomina/calcular/{eid}?mes=2026-09", headers=_h(app)).get_json()
+    calc = c.get(f"/nomina/calcular/{eid}?periodo=mensual&mes=2026-09", headers=_h(app)).get_json()
     assert calc["horas_extra"] is None
     rid = r.get_json()["_id"]
     assert c.patch(f"/horas-extra/{rid}", json={"estado": "aprobada"}, headers=_h(app)).status_code == 200
-    calc = c.get(f"/nomina/calcular/{eid}?mes=2026-09", headers=_h(app)).get_json()
+    calc = c.get(f"/nomina/calcular/{eid}?periodo=mensual&mes=2026-09", headers=_h(app)).get_json()
     assert calc["horas_extra"]["dobles"] == 3 and calc["horas_extra"]["triples"] == 1
     assert calc["percepcion_bruta"] == round(800 * 30.4 + 3 * 100 * 2 + 1 * 100 * 3, 2)
 

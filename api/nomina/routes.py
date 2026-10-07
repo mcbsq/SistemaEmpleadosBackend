@@ -45,9 +45,17 @@ def setup_nomina_routes(app, mongo):
     @app.route('/nomina/calcular/<empleado_id>', methods=['GET'])
     @require_self_or_roles('empleado_id', *ROLES_NOMINA)
     def calcular_nomina_route(empleado_id):
-        periodo = request.args.get('periodo', 'mensual')
-        if periodo not in ('mensual', 'quincenal'):
-            return jsonify({'error': 'periodo debe ser mensual o quincenal'}), 400
+        periodo = request.args.get('periodo')
+        if not periodo:
+            # Sin periodo explícito: el de pago del propio empleado.
+            from bson.objectid import ObjectId
+            try:
+                rh = mongo.db.rh.find_one({'empleado_id': ObjectId(empleado_id)}) or {}
+            except Exception:
+                rh = {}
+            periodo = rh.get('PeriodicidadPago') or 'quincenal'
+        if periodo not in ('mensual', 'quincenal', 'catorcenal', 'semanal'):
+            return jsonify({'error': 'periodo debe ser semanal, catorcenal, quincenal o mensual'}), 400
         return calcular_nomina(mongo, empleado_id, periodo, mes=request.args.get('mes'))
 
     # ── Aguinaldo ────────────────────────────────────────────────────────

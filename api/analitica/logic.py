@@ -33,7 +33,8 @@ def get_catalogo_route(mongo, identity):
 
 def get_permisos_route(mongo):
     permisos = get_permisos(mongo)
-    return jsonify({"permisos": {r: permisos.get(r, []) for r in ROLES_TODOS}}), 200
+    roles = list(ROLES_TODOS) + [r for r in permisos if r not in ROLES_TODOS]
+    return jsonify({"permisos": {r: permisos.get(r, []) for r in roles}}), 200
 
 
 def guardar_permisos(mongo, data, identity):
@@ -42,9 +43,12 @@ def guardar_permisos(mongo, data, identity):
         return jsonify({"error": "permisos debe ser un objeto {rol: [ids]}"}), 400
 
     ids_validos = {r["id"] for r in CATALOGO_REPORTES}
+    # Roles de sistema + roles personalizados (p. ej. DIRECCION) de la empresa.
+    doc_custom = mongo.db.roles_custom.find_one({"tipo": "custom"}) or {}
+    roles_validos = set(ROLES_TODOS) | {r.get("nombre") for r in doc_custom.get("roles", []) if r.get("nombre")}
     limpio = {}
     for role, ids in permisos.items():
-        if role not in ROLES_TODOS or not isinstance(ids, list):
+        if role not in roles_validos or not isinstance(ids, list):
             continue
         limpio[role] = [i for i in ids if i in ids_validos]
 
