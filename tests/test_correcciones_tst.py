@@ -155,3 +155,16 @@ def test_no_dos_cuentas_con_el_mismo_correo_o_usuario_en_la_empresa(monkeypatch)
         assert st == 409 and "correo" in r.get_json()["error"]
         r, st = U.create_usuario(mongo, "cperez", "secreto1", None, email="nuevo@tst.com")
         assert st == 409 and "usuario" in r.get_json()["error"]
+
+
+def test_guardar_configuracion_sin_logo_no_falla_y_lo_quita():
+    from api.org.logic import update_config
+    mongo = FakeMongo()
+    app = Flask(__name__)
+    with app.app_context():
+        _, status = update_config(mongo, "acme", {"name": "Acme", "logo": "data:image/png;base64,AAAA"})
+        assert status == 200
+        resp, status = update_config(mongo, "acme", {"name": "Acme", "logo": ""})
+        assert status == 200, resp.get_json()
+        _, status = update_config(mongo, "acme", {"logo": "no-es-imagen"})
+        assert status == 400

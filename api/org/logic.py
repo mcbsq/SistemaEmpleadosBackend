@@ -133,6 +133,11 @@ def update_config(mongo, org_id, updates):
         updates.pop("_id", None)
         updates.pop("org_id", None)
         logo = updates.get("logo")
+        # "" = quitar el logo (Configuración → Identidad lo manda así cuando
+        # la empresa no tiene logo; antes respondía 400 y no dejaba guardar).
+        if logo == "":
+            updates["logo"] = None
+            logo = None
         if logo is not None:
             # Se guarda como data URL (PNG/JPG/WebP/SVG) ya reducido por el cliente.
             if not isinstance(logo, str) or not logo.startswith(("data:image/png", "data:image/jpeg", "data:image/webp", "data:image/svg+xml")):
