@@ -14,6 +14,8 @@ from functools import wraps
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt
 
+from api.auth_decorators import rol_de_identidad
+
 # Permisos por rol de sistema (espejo de RoleManager.jsx / authService.js).
 PERMISOS_DEFAULT = {
     "SUPER_ADMIN":     ["*"],
@@ -92,7 +94,7 @@ def require_roles_or_permission(mongo, permiso, *roles_sistema):
         @jwt_required()
         def wrapper(*args, **kwargs):
             identity = get_jwt()
-            role = identity.get("role") if isinstance(identity, dict) else None
+            role = rol_de_identidad(identity)
             if role in roles_sistema or (role == "RH" and "ADMIN" in roles_sistema):
                 return f(*args, **kwargs)
             if role not in _ROLES_SISTEMA:
@@ -118,7 +120,7 @@ def require_permission(mongo, *permisos_validos):
         @jwt_required()
         def wrapper(*args, **kwargs):
             identity = get_jwt()
-            role = identity.get("role") if isinstance(identity, dict) else None
+            role = rol_de_identidad(identity)
             if role in ("ADMIN", "SUPER_ADMIN", "RH"):
                 return f(*args, **kwargs)
             permisos = get_permisos_for_role(mongo, role)

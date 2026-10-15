@@ -16,6 +16,17 @@ from flask_jwt_extended import jwt_required, get_jwt
 ROL_RH = "RH"
 
 
+def rol_de_identidad(identity):
+    """Rol de la sesión de servidor si ya se acotó; si no, el del JWT."""
+    from flask import g
+    sesion = getattr(g, "sesion_servidor", None)
+    if isinstance(sesion, dict) and sesion.get("rol_efectivo"):
+        return sesion["rol_efectivo"]
+    if isinstance(identity, dict):
+        return identity.get("role")
+    return None
+
+
 def rol_permitido(role, allowed_roles):
     """True si `role` está en allowed_roles, contando a RH como ADMIN."""
     if role in allowed_roles:
@@ -33,7 +44,7 @@ def require_roles(*allowed_roles):
         @jwt_required()
         def wrapper(*args, **kwargs):
             identity = get_jwt()
-            role = identity.get('role') if isinstance(identity, dict) else None
+            role = rol_de_identidad(identity)
             if not rol_permitido(role, allowed_roles):
                 return jsonify({"error": "Acceso no autorizado"}), 403
             return f(*args, **kwargs)
@@ -54,7 +65,7 @@ def require_self_or_roles(id_param, *allowed_roles):
         @jwt_required()
         def wrapper(*args, **kwargs):
             identity = get_jwt()
-            role = identity.get('role') if isinstance(identity, dict) else None
+            role = rol_de_identidad(identity)
             own_empleado_id = identity.get('empleado_id') if isinstance(identity, dict) else None
             requested_id = kwargs.get(id_param)
 

@@ -1,6 +1,9 @@
 from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt
 from .logic import login, change_password
+from core.client_ip import ip_cliente
+from core.cookies_sesion import limpiar
+from core.sesiones import obtener, revocar
 import logging
 
 # Esta función configura las rutas relacionadas con las operaciones de inicio de sesión.
@@ -33,11 +36,42 @@ def setup_login_routes(app, mongo):
         from .logic import _issue_token_response
         return renovar(mongo, get_jwt(), _issue_token_response)
 
+    @app.route('/session', methods=['GET'])
+    def session_route():
+        sesion = obtener(mongo, request.cookies.get("empleados_sid"))
+        if not sesion:
+            return jsonify({"error": "Sin sesión"}), 401
+        return jsonify({
+            "csrf_token": sesion.get("csrf"),
+            "session_expires_at": sesion.get("expira_en"),
+            "must_change_password": bool(sesion.get("must_change_password")),
+        }), 200
+
+    @app.route('/logout', methods=['POST'])
+    @jwt_required(optional=True)
+    def logout_route():
+        from core.aegis_client import aegis_logout
+        claims = {}
+        try:
+            claims = get_jwt() or {}
+        except Exception:
+            claims = {}
+        sid = request.cookies.get("empleados_sid") or claims.get("sid")
+        sesion = obtener(mongo, sid)
+        if sesion and sesion.get("refresh_token"):
+            err = aegis_logout(sesion["refresh_token"], tenant_id=sesion.get("org_id"))
+            if err and err[1] >= 500:
+                return jsonify({"error": "No se pudo cerrar la sesión de identidad. Vuelve a intentarlo."}), 502
+        if sid:
+            revocar(mongo, sid)
+        respuesta = jsonify({"message": "Sesión cerrada"})
+        limpiar(respuesta)
+        return respuesta, 200
+
     @app.route('/recuperar-contrasena', methods=['POST'])
     def recuperar_route():
         from .sesion import solicitar_recuperacion
-        ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
-        return solicitar_recuperacion(mongo, request.get_json(silent=True) or {}, ip)
+        return solicitar_recuperacion(mongo, request.get_json(silent=True) or {}, ip_cliente(request))
 
     # Cambio de contraseña del propio usuario autenticado. En modo Aegis el
     # cambio ocurre allá (y limpia must_change_password); en legacy, en Mongo.
@@ -53,6 +87,11 @@ def setup_login_routes(app, mongo):
                 # Contraseña nueva = todos los celulares vuelven a pedir login.
                 from api.dispositivos.logic import revocar_de_usuario
                 revocar_de_usuario(mongo, claims.get('user'), claims.get('org_id'), 'cambio de contraseña')
+                if isinstance(resp, tuple):
+                    cuerpo, codigo = resp
+                    limpiar(cuerpo)
+                    return cuerpo, codigo
+                limpiar(resp)
             return resp
         except Exception as e:
             logging.error(f"Error en ruta de change-password: {str(e)}")

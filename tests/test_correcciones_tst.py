@@ -72,20 +72,29 @@ def test_refresh_renueva_la_sesion_solo_de_cuentas_activas():
     assert c.post("/refresh").status_code == 401
 
 
-def test_recuperar_contrasena_avisa_al_super_admin_sin_revelar_cuentas():
+def test_recuperar_contrasena_misma_respuesta_sin_avisar_al_admin(monkeypatch):
     app, mongo = _app()
     c = app.test_client()
+    llamadas = []
+    monkeypatch.setattr("api.login.sesion.get_aegis_settings", lambda: {"login_enabled": True, "app_id": "empleados"})
+    monkeypatch.setattr(
+        "core.aegis_client.aegis_password_reset_request",
+        lambda email, tenant_id: llamadas.append((email, tenant_id)) or None,
+    )
+    monkeypatch.setattr(
+        "api.login.sesion.aegis_resolve_tenant",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no debe resolver")),
+        raising=False,
+    )
     mongo.db.usuario.insert_one({"user": "cperez", "email": "cperez@tst.com", "role": "EMPLOYEE", "org_id": "tst"})
     mongo.db.usuario.insert_one({"user": "jefa", "role": "SUPER_ADMIN", "org_id": "tst"})
-    ok = c.post("/recuperar-contrasena", json={"identificador": "cperez@tst.com"})
-    nadie = c.post("/recuperar-contrasena", json={"identificador": "nadie@x.com"})
+    ok = c.post("/recuperar-contrasena", json={"identificador": "cperez@tst.com", "org_id": "tst"})
+    nadie = c.post("/recuperar-contrasena", json={"identificador": "nadie@x.com", "org_id": "tst"})
     assert ok.status_code == nadie.status_code == 200
     assert ok.get_json()["message"] == nadie.get_json()["message"]
-    avisos = list(mongo.db.notificaciones.find({"usuario": "jefa"}))
-    assert len(avisos) == 1 and "cperez" in avisos[0]["mensaje"]
-    # Repetir no duplica el aviso mientras siga pendiente.
-    c.post("/recuperar-contrasena", json={"identificador": "cperez"})
-    assert len(list(mongo.db.notificaciones.find({"usuario": "jefa"}))) == 1
+    assert "instrucciones" in ok.get_json()["message"]
+    assert list(mongo.db.notificaciones.find({"usuario": "jefa"})) == []
+    assert ("cperez@tst.com", "tst") in llamadas and ("nadie@x.com", "tst") in llamadas
 
 
 def test_sdi_se_calcula_solo_y_el_manual_exige_motivo():

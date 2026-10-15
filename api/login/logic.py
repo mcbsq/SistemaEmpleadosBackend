@@ -21,9 +21,18 @@ import logging
 import os
 
 from core.aegis_config import get_aegis_settings
-from core.aegis_client import aegis_password_login, aegis_get_me, aegis_change_password, aegis_resolve_tenant
+from core.aegis_client import (
+    aegis_password_login, aegis_get_me, aegis_get_access, aegis_change_password, aegis_resolve_tenant,
+)
+from core.contrasena import contrasena_aceptable
+from core.cookies_sesion import fijar
+from core.designacion_admin import designar_si_corresponde
+from core.perfiles_aegis import APP_KEY, clasificar_perfiles, misma_empresa_y_app
 from core.permissions import PERMISOS_DEFAULT, DASHBOARD_MODULOS, get_permisos_for_role
 from core.fechas_especiales import verificar_fechas_especiales
+from core.rol_efectivo import acotar
+from core.sesiones import crear, obtener, prorrogar, revocar, revocar_usuario
+from core.vinculo_identidad import buscar_usuario_por_par, validar_correspondencia
 from api.tenants.logic import registrar_tenant
 from api.org.logic import get_session_minutes
 
@@ -62,39 +71,37 @@ def _tenant_overrides():
         return {}
 
 
-def _find_usuario_after_aegis(mongo, profile: dict):
-    """
-    Aegis ya validó la contraseña; aquí enlazamos con datos de negocio (rol, empleado_id).
-    Orden: id de Aegis → email guardado en Mongo → user igual a parte local o email completo.
-    """
-    uid = profile.get("id")
-    email_raw = (profile.get("email") or "").strip()
-    email = email_raw.lower() if email_raw else ""
-
-    if uid is not None:
-        u = mongo.db.usuario.find_one({"aegis_user_id": uid})
-        if u:
-            return u
-        u = mongo.db.usuario.find_one({"aegis_user_id": str(uid)})
-        if u:
-            return u
-
-    if email:
-        u = mongo.db.usuario.find_one({"email": email})
-        if u:
-            return u
-        local = email.split("@", 1)[0]
-        u = mongo.db.usuario.find_one({"user": local})
-        if u:
-            return u
-        u = mongo.db.usuario.find_one({"user": email})
-        if u:
-            return u
-
-    return None
+def _find_usuario_after_aegis(mongo, profile: dict, org_id: str = None):
+    """Pareja UUID de empresa + UUID de usuario. No enlaza por correo."""
+    return buscar_usuario_por_par(
+        mongo,
+        profile.get("id"),
+        profile.get("tenant_id"),
+        org_id or "",
+    )
 
 
-def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_password: bool = False, org_id: str = None):
+def _detalle_aegis(body):
+    if isinstance(body, dict):
+        detalle = body.get("detail") or body.get("error") or ""
+        if isinstance(detalle, list):
+            return " ".join(str(parte) for parte in detalle)
+        return str(detalle)
+    return str(body or "")
+
+
+def _pide_cambio(err):
+    if not err or not isinstance(err, tuple):
+        return False
+    body, status = err
+    return status == 403 and "password change" in _detalle_aegis(body).lower()
+
+
+def _issue_token_response(
+    mongo, usuario: dict, login_label: str, must_change_password: bool = False,
+    org_id: str = None, sesion_aegis: dict = None, sid_existente: str = None,
+    rol_local: str = None, incluir_jwt=None,
+):
     """
     Emite el access_token de Flask-JWT. El claim "sub" es el username (string,
     exigido por RFC 7519 / validado por PyJWT >= 2.10); el resto de la identidad
@@ -130,27 +137,51 @@ def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_pa
     # Solo tiene efecto real para ADMIN; SUPER_ADMIN ve todo y EMPLOYEE usa
     # su propia área (resuelta en empleados/logic.py vía su empleado_id).
     areas_administradas = (usuario.get("areas_administradas") or []) if role == "ADMIN" else []
+    minutos = get_session_minutes(mongo, org_id)
+    # plataforma solo si ya está en la cuenta local. Un perfil admin de
+    # producto no la enciende.
+    plataforma = bool(usuario.get("plataforma")) and role == "SUPER_ADMIN"
+    if incluir_jwt is None:
+        incluir_jwt = not get_aegis_settings()["login_enabled"]
 
     claims = {
-        # Dueño de la plataforma (cuenta suprema de Cibercom). Distinto del
-        # SUPER_ADMIN de cualquier empresa, incluida la propia Cibercom.
-        "plataforma":          bool(usuario.get("plataforma")),
+        "plataforma":          plataforma,
         "user":                user,
         "role":                role,
         "empleado_id":         empleado_id,
         "org_id":              org_id,
         "areas_administradas": areas_administradas,
+        "must_change_password": bool(must_change_password),
     }
+    if sid_existente:
+        sesion = prorrogar(mongo, sid_existente, minutos)
+        if not sesion:
+            return jsonify({"error": "Tu sesión ya no es válida. Inicia sesión de nuevo."}), 401
+        if sesion.get("rol_efectivo"):
+            role = sesion["rol_efectivo"]
+            if role in PERMISOS_DEFAULT:
+                permisos = PERMISOS_DEFAULT[role]
+                modulos = DASHBOARD_MODULOS.get(role, DASHBOARD_MODULOS["EMPLOYEE"])
+            plataforma = bool(sesion.get("claims", {}).get("plataforma")) and role == "SUPER_ADMIN"
+            claims["role"] = role
+            claims["plataforma"] = plataforma
+        claims["sid"] = sid_existente
+    else:
+        sesion = crear(
+            mongo, user=user, org_id=org_id, claims=claims,
+            must_change_password=must_change_password,
+            aegis=sesion_aegis, minutos=minutos, rol_local=rol_local or role,
+        )
+        claims["sid"] = sesion["sid"]
     access_token = create_access_token(
         identity=user, additional_claims=claims,
-        expires_delta=timedelta(minutes=get_session_minutes(mongo, org_id)),
+        expires_delta=timedelta(minutes=minutos),
     )
 
     logger.info("Login exitoso: %s (%s)", user, role)
     verificar_fechas_especiales(mongo)
 
-    return jsonify({
-        "access_token":         access_token,
+    cuerpo = {
         "user":                 user,
         "role":                 role,
         "empleado_id":          empleado_id,
@@ -159,8 +190,15 @@ def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_pa
         "modulos":              modulos,
         "areas_administradas":  areas_administradas,
         "must_change_password": must_change_password,
-        "plataforma":           bool(usuario.get("plataforma")),
-    }), 200
+        "plataforma":           plataforma,
+        "session_expires_at":   sesion.get("expira_en"),
+        "csrf_token":           sesion.get("csrf"),
+    }
+    if incluir_jwt:
+        cuerpo["access_token"] = access_token
+    respuesta = jsonify(cuerpo)
+    fijar(respuesta, sesion, access_token)
+    return respuesta, 200
 
 
 def _login_legacy(mongo, user, password):
@@ -197,121 +235,141 @@ def login(mongo, identifier, password, requested_org_id=None):
         settings = get_aegis_settings()
 
         if settings["login_enabled"]:
-            # 0) Resolver el tenant dinámicamente (Aegis es multi-tenant: el
-            # mismo identifier puede existir en varias empresas). Si no se
-            # encuentra bajo la app nueva ("empleados"), se cae al par
-            # tenant/app legacy ("cibercom"/"principal") con el que se crearon
-            # las cuentas antes de este cambio — así ninguna cuenta existente
-            # se rompe mientras se completa la migración.
-            tenant_id, app_id = settings["tenant_id"], settings["app_id"]
+            # app_key fijo. Un 404, 409, 429 o 5xx no cambia de aplicación
+            # ni consulta el hash de Mongo.
+            app_id = APP_KEY
             resolved = None
             requested_org_id = (requested_org_id or "").strip().lower()
             override_tenant = _tenant_overrides().get((identifier or "").strip().lower())
             if requested_org_id:
-                # La entrada /<empresa> desambigua correos que pertenecen a
-                # varios tenants. Aegis sigue siendo quien valida que las
-                # credenciales realmente correspondan a ese tenant.
-                tenant_id, app_id = requested_org_id, settings["app_id"]
+                tenant_id = requested_org_id
             elif override_tenant:
-                logger.info("Login usando override de tenant temporal para identifier=%s", identifier[:3] + "...")
-                tenant_id, app_id = override_tenant, settings["app_id"]
+                logger.info("Login usando contexto de empresa conocido")
+                tenant_id = override_tenant
             else:
-                resolved, resolve_err = aegis_resolve_tenant(identifier, settings["app_id"])
-                if resolved:
-                    tenant_id, app_id = resolved["tenant_key"], resolved["app_key"]
-                elif resolve_err and resolve_err[1] == 409:
-                    logger.warning("Aegis resolve-tenant ambiguo para identifier=%s", identifier[:3] + "...")
-                    return jsonify({
-                        "error": "Tu cuenta pertenece a más de una empresa. Usa la liga específica de tu empresa.",
-                    }), 409
-                else:
-                    # 404 (u otro): probablemente cuenta legacy sin app_permissions
-                    # nuevas — se reintenta con el par estático de antes.
-                    tenant_id, app_id = settings["tenant_id"], settings["legacy_app_id"]
+                resolved, resolve_err = aegis_resolve_tenant(identifier, app_id)
+                if resolve_err:
+                    status = resolve_err[1]
+                    if status == 409:
+                        return jsonify({
+                            "error": "Tu cuenta pertenece a más de una empresa. Usa la liga específica de tu empresa.",
+                        }), 409
+                    if status == 429:
+                        return jsonify({"error": "Demasiadas solicitudes. Intenta más tarde."}), 429
+                    if status == 404:
+                        return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
+                    if status >= 500:
+                        return jsonify({"error": "Servicio de autenticación no disponible"}), 503
+                    return jsonify({"error": "No se pudo iniciar sesión"}), 502
+                if (resolved or {}).get("app_key") not in (None, "", app_id):
+                    logger.error("resolve-tenant devolvió otra app; no se usa")
+                    return jsonify({"error": "No se pudo iniciar sesión"}), 502
+                tenant_id = resolved["tenant_key"]
 
-            # 1) Autenticar contra Aegis (contraseña vive allí).
             tokens, err = aegis_password_login(identifier, password, tenant_id=tenant_id, app_id=app_id)
             if err:
-                body, status = err
-                # Transición: opcionalmente reintentar con hash Mongo si Aegis falla.
-                if settings["legacy_fallback"] and status in (401, 403, 422):
-                    logger.info("Aegis rechazó credenciales; fallback legacy para identifier=%s", identifier[:3] + "...")
-                    return _login_legacy(mongo, identifier.strip(), password)
-                if status == 401 or status == 403:
+                _body, status = err
+                if status in (401, 403, 404):
                     return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
-                if status == 503:
-                    if settings["legacy_fallback"]:
-                        return _login_legacy(mongo, identifier.strip(), password)
-                    return jsonify(body), 503
-                logger.warning("Aegis login HTTP %s: %s", status, body)
+                if status == 429:
+                    return jsonify({"error": "Demasiadas solicitudes. Intenta más tarde."}), 429
+                if status >= 500:
+                    return jsonify({"error": "Servicio de autenticación no disponible"}), 503
                 return jsonify({"error": "No se pudo iniciar sesión"}), 502
 
             access_token = tokens.get("access_token")
-            if not access_token:
-                logger.error("Aegis login sin access_token en respuesta")
+            refresh_token = tokens.get("refresh_token")
+            if not access_token or not refresh_token:
+                logger.error("Aegis login sin par de tokens")
                 return jsonify({"error": "Error interno del servidor"}), 502
 
-            # 2) Saber email/id canónico en Aegis para buscar la fila en Mongo.
             profile, me_err = aegis_get_me(access_token, tenant_id=tenant_id, app_id=app_id)
             if me_err:
-                body, status = me_err
-                logger.error("Aegis /v1/me falló: %s %s", status, body)
+                logger.error("Aegis /v1/me falló: %s", me_err[1])
                 return jsonify({"error": "No se pudo validar la sesión"}), 502
 
-            # Multi-tenencia: a partir de aquí toda consulta a Mongo (incluida
-            # la búsqueda del usuario que sigue) queda aislada a la empresa
-            # que Aegis acaba de resolver — es la autoridad real del tenant,
-            # no algo que este backend deba adivinar.
+            debe_cambiar = bool(tokens.get("must_change_password") or profile.get("must_change_password"))
+            acceso = None
+            if not debe_cambiar:
+                acceso, acceso_err = aegis_get_access(access_token, tenant_id=tenant_id, app_id=app_id)
+                if _pide_cambio(acceso_err):
+                    debe_cambiar = True
+                elif acceso_err:
+                    status = acceso_err[1]
+                    if status == 429 or status >= 500:
+                        return jsonify({"error": "Servicio de autenticación no disponible"}), 503
+                    logger.error("Aegis /v1/access falló: %s", status)
+                    return jsonify({"error": "No se pudo validar el acceso"}), 502
+                elif not misma_empresa_y_app(profile, acceso, app_id):
+                    return jsonify({
+                        "error": "El acceso a Empleados no está disponible para esta cuenta.",
+                    }), 403
+                elif clasificar_perfiles(acceso.get("roles")) == "denegado":
+                    return jsonify({"error": "Perfil de acceso no reconocido."}), 403
+
+            if validar_correspondencia(mongo, tenant_id, profile.get("tenant_id"), app_id) == "conflicto":
+                return jsonify({
+                    "error": "La empresa no coincide con el vínculo ya registrado.",
+                }), 409
+
             g.org_id = tenant_id
-            usuario = _find_usuario_after_aegis(mongo, profile)
-            if not usuario:
-                # Auto-aprovisionamiento tipo Notion: si esta empresa (tenant_id)
-                # nunca ha tenido NADIE en este sistema, la primera persona que
-                # logra loguearse (ya con su cuenta creada del lado de Aegis)
-                # se convierte automáticamente en SUPER_ADMIN de su propio
-                # espacio aislado — nadie de Cibercom tiene que intervenir a
-                # mano. Si la empresa YA tiene gente dada de alta y esta
-                # persona no es una de ellas, sigue siendo un 403 (necesita
-                # que su propio SUPER_ADMIN la invite).
-                if tenant_id != settings["tenant_id"] and mongo.db.usuario.count_documents({}) == 0:
-                    email = (profile.get("email") or "").strip().lower()
+            sesion_aegis = {
+                "user_id": profile.get("id"),
+                "tenant_id": profile.get("tenant_id"),
+                "app_key": app_id,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+            }
+            if debe_cambiar:
+                usuario = _find_usuario_after_aegis(mongo, profile, org_id=tenant_id)
+                if usuario and usuario.get("activo") is False:
+                    return jsonify({"error": "Tu cuenta está desactivada. Contacta a Recursos Humanos."}), 403
+                if not usuario:
                     usuario = {
-                        "user": email.split("@", 1)[0] if email else f"admin_{tenant_id}",
-                        "role": "SUPER_ADMIN",
-                        "empleado_id": None,
-                        "email": email or None,
-                        "aegis_user_id": profile.get("id"),
+                        "user": (profile.get("email") or identifier).strip().lower(),
+                        "role": "EMPLOYEE",
+                        "plataforma": False,
                         "org_id": tenant_id,
+                        "activo": True,
+                        "email": profile.get("email"),
                     }
-                    mongo.db.usuario.insert_one(dict(usuario))
-                    logger.info(
-                        "Auto-aprovisionado primer SUPER_ADMIN de tenant nuevo '%s': %s",
-                        tenant_id, usuario["user"],
-                    )
-                    # Mismo momento en que "nace" la empresa: registrarla en
-                    # el catálogo central para que Cibercom la vea (ver
-                    # api/tenants/logic.py). resolved trae tenant_name porque
-                    # solo se llega aquí cuando resolve-tenant sí encontró un
-                    # tenant real (tenant_id != settings["tenant_id"]).
-                    registrar_tenant(mongo, tenant_id, nombre=(resolved or {}).get("tenant_name"))
                 else:
-                    logger.warning(
-                        "Login Aegis OK pero sin fila en Mongo (tenant=%s id=%s email=%s)",
-                        tenant_id, profile.get("id"), profile.get("email"),
-                    )
+                    usuario = dict(usuario)
+                    usuario["role"] = "EMPLOYEE"
+                    usuario["plataforma"] = False
+                return _issue_token_response(
+                    mongo, usuario, identifier.strip(),
+                    must_change_password=True, org_id=tenant_id,
+                    sesion_aegis=sesion_aegis, rol_local="EMPLOYEE", incluir_jwt=False,
+                )
+
+            usuario = _find_usuario_after_aegis(mongo, profile, org_id=tenant_id)
+            if not usuario:
+                usuario = designar_si_corresponde(mongo, tenant_id, profile, (acceso or {}).get("roles"))
+                if usuario:
+                    registrar_tenant(mongo, tenant_id, nombre=(resolved or {}).get("tenant_name"))
+                    logger.info("Administrador designado para org_id=%s", tenant_id)
+                else:
+                    logger.warning("Login Aegis sin vínculo local en org_id=%s", tenant_id)
                     return jsonify({
                         "error": "Usuario no registrado en el sistema de empleados. Contacte al administrador.",
                     }), 403
 
-            # 3) Respuesta idéntica a la histórica: JWT propio + permisos desde
-            # Mongo. must_change_password viene de Aegis: True cuando el usuario
-            # sigue usando una contraseña temporal generada por el admin.
+            rol_local = usuario.get("role")
+            rol = acotar(rol_local, (acceso or {}).get("roles"))
+            if rol is None:
+                return jsonify({"error": "Perfil de acceso no reconocido."}), 403
+            usuario = dict(usuario)
+            usuario["role"] = rol
             return _issue_token_response(
                 mongo,
                 usuario,
                 identifier.strip(),
-                must_change_password=bool(tokens.get("must_change_password")),
+                must_change_password=False,
                 org_id=tenant_id,
+                sesion_aegis=sesion_aegis,
+                rol_local=rol_local,
+                incluir_jwt=False,
             )
 
         return _login_legacy(mongo, identifier.strip(), password)
@@ -335,6 +393,34 @@ def change_password(mongo, jwt_claims, current_password, new_password):
         if not user:
             return jsonify({"error": "Sesión inválida"}), 401
 
+        settings = get_aegis_settings()
+        sesion = getattr(g, "sesion_servidor", None)
+        if settings["login_enabled"] and isinstance(sesion, dict) and sesion.get("must_change_password"):
+            if not contrasena_aceptable(new_password):
+                return jsonify({
+                    "error": "La nueva contraseña debe tener entre 12 y 256 caracteres, "
+                             "con mayúscula, minúscula, número y símbolo.",
+                }), 400
+            identifier = sesion.get("user") or user
+            err = aegis_change_password(
+                identifier, current_password, new_password,
+                tenant_id=sesion.get("org_id"), app_id=APP_KEY,
+            )
+            if err:
+                body, status = err
+                if status in (401, 403):
+                    return jsonify({"error": "La contraseña que escribiste no es correcta. Si es tu primer ingreso, usa la contraseña temporal que te llegó por correo."}), 401
+                logger.warning("Aegis change-password HTTP %s: %s", status, body)
+                if isinstance(body, dict) and body.get("detail"):
+                    return jsonify({"error": body["detail"]}), status
+                return jsonify({"error": "No se pudo cambiar la contraseña"}), 502
+            revocar(mongo, sesion.get("sid"))
+            revocar_usuario(mongo, identifier, sesion.get("org_id"))
+            return jsonify({
+                "message": "Contraseña actualizada. Vuelve a iniciar sesión.",
+                "reautenticar": True,
+            }), 200
+
         usuario = mongo.db.usuario.find_one({"user": user})
         if not usuario:
             return jsonify({"error": "Usuario no encontrado"}), 404
@@ -342,9 +428,11 @@ def change_password(mongo, jwt_claims, current_password, new_password):
         settings = get_aegis_settings()
 
         if settings["login_enabled"] and usuario.get("aegis_user_id"):
-            # Aegis exige mínimo 12 caracteres para la nueva contraseña.
-            if len(new_password) < 12:
-                return jsonify({"error": "La nueva contraseña debe tener al menos 12 caracteres."}), 400
+            if not contrasena_aceptable(new_password):
+                return jsonify({
+                    "error": "La nueva contraseña debe tener entre 12 y 256 caracteres, "
+                             "con mayúscula, minúscula, número y símbolo.",
+                }), 400
             identifier = usuario.get("email") or user
             # org_id en Mongo es el tenant_key que Aegis ya resolvió para
             # esta cuenta (no es ambiguo como en el login genérico — este
@@ -359,7 +447,11 @@ def change_password(mongo, jwt_claims, current_password, new_password):
                 if isinstance(body, dict) and body.get("detail"):
                     return jsonify({"error": body["detail"]}), status
                 return jsonify({"error": "No se pudo cambiar la contraseña"}), 502
-            return jsonify({"message": "Contraseña actualizada"}), 200
+            revocar_usuario(mongo, user, usuario.get("org_id"))
+            return jsonify({
+                "message": "Contraseña actualizada. Vuelve a iniciar sesión.",
+                "reautenticar": True,
+            }), 200
 
         # Modo legacy: hash en Mongo.
         stored = usuario.get("password")
