@@ -40,9 +40,14 @@ def get_aegis_settings():
         "app_id": app_id,
         "api_key": api_key,
         "timeout": timeout,
-        # Conservados para no romper lecturas viejas. En modo Aegis no se usan:
-        # no hay caída a otra app ni a hashes de Mongo.
-        "legacy_app_id": "",
+        # Modo migración (AEGIS_MIGRACION_LEGACY=true): mientras las cuentas
+        # no tengan la app "empleados" en Aegis, las que resolve-tenant no
+        # encuentra ahí entran con la app anterior (AEGIS_LEGACY_APP_ID, por
+        # defecto "principal") de AEGIS_TENANT_ID, como antes de la
+        # integración. Apagado, no hay caída a otra app. Nunca se cae a
+        # hashes de Mongo.
+        "migracion": _truthy(os.environ.get("AEGIS_MIGRACION_LEGACY"), False),
+        "legacy_app_id": (os.environ.get("AEGIS_LEGACY_APP_ID") or "principal").strip(),
         "legacy_fallback": False,
         "login_enabled": login_enabled,
         "admin_enabled": admin_enabled,

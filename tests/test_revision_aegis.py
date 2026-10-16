@@ -457,3 +457,49 @@ def test_navegador_no_recibe_jwt_aunque_imite_el_encabezado_de_la_app(monkeypatc
     # Y el mismo login sin el encabezado de la app tampoco lo recibe.
     r = app.test_client().post("/login", json={"user": "ana@acme.test", "password": "Segura123!"})
     assert r.status_code == 200 and "access_token" not in r.get_json()
+
+
+def _migracion(monkeypatch, encendida):
+    ajustes = {**_ajustes(), "tenant_id": "acme", "migracion": encendida, "legacy_app_id": "principal"}
+    for ruta in ("api.login.logic", "api.login.sesion", "core.aegis_config", "core.migracion_aegis"):
+        monkeypatch.setattr(f"{ruta}.get_aegis_settings", lambda: ajustes)
+    llamadas = {"login": [], "access": 0}
+    monkeypatch.setattr("api.login.logic.aegis_resolve_tenant", lambda identifier, app: (None, ({"detail": "not found"}, 404)))
+    def login_aegis(identifier, password, tenant_id=None, app_id=None):
+        llamadas["login"].append((tenant_id, app_id))
+        return {"access_token": "acceso", "refresh_token": "r" * 24, "must_change_password": False}, None
+    def acceso(*_a, **_k):
+        llamadas["access"] += 1
+        return None, ({"detail": "sin acceso a empleados"}, 403)
+    monkeypatch.setattr("api.login.logic.aegis_password_login", login_aegis)
+    monkeypatch.setattr("api.login.logic.aegis_get_me", lambda *a, **k: (_perfil(app_key="principal"), None))
+    monkeypatch.setattr("api.login.logic.aegis_get_access", acceso)
+    monkeypatch.setattr("core.aegis_client.aegis_get_access", acceso)
+    mongo = FakeMongo()
+    mongo.db.raw.usuario.insert_one({"user": "ana@acme.test", "email": "ana@acme.test", "role": "RH",
+                                     "org_id": "acme", "aegis_user_id": USUARIO, "aegis_tenant_id": TENANT, "activo": True})
+    return mongo, llamadas
+
+
+def test_modo_migracion_deja_entrar_a_cuentas_sin_la_app_empleados(monkeypatch):
+    mongo, llamadas = _migracion(monkeypatch, True)
+    app = _app(mongo)
+    cliente = app.test_client()
+    r = cliente.post("/login", json={"user": "ana@acme.test", "password": "Segura123!"})
+    assert r.status_code == 200, r.get_json()
+    assert llamadas["login"] == [("acme", "principal")]
+    assert r.get_json()["role"] == "RH"            # rol de Mongo, como antes
+    sesion = mongo.db.raw.sesiones.find_one({})
+    assert sesion["app_key"] == "principal"
+    csrf = r.get_json()["csrf_token"]
+    # Las peticiones siguientes no exigen /v1/access de "empleados".
+    r = cliente.post("/nota", json={}, headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200, r.get_json()
+    assert llamadas["access"] == 0
+
+
+def test_sin_modo_migracion_queda_estricto(monkeypatch):
+    mongo, llamadas = _migracion(monkeypatch, False)
+    r = _app(mongo).test_client().post("/login", json={"user": "ana@acme.test", "password": "Segura123!"})
+    assert r.status_code == 401
+    assert llamadas["login"] == []

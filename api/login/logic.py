@@ -246,6 +246,7 @@ def login(mongo, identifier, password, requested_org_id=None):
             # app_key fijo. Un 404, 409, 429 o 5xx no cambia de aplicación
             # ni consulta el hash de Mongo.
             app_id = APP_KEY
+            legacy = False
             resolved = None
             requested_org_id = (requested_org_id or "").strip().lower()
             override_tenant = _tenant_overrides().get((identifier or "").strip().lower())
@@ -264,15 +265,22 @@ def login(mongo, identifier, password, requested_org_id=None):
                         }), 409
                     if status == 429:
                         return jsonify({"error": "Demasiadas solicitudes. Intenta más tarde."}), 429
-                    if status == 404:
+                    if status == 404 and settings.get("migracion") and settings.get("tenant_id"):
+                        # Cuenta sin la app "empleados" todavía: entra con la app
+                        # anterior de la empresa base, como antes de la integración.
+                        logger.info("Login en modo migración con la app anterior")
+                        tenant_id, app_id, legacy = settings["tenant_id"], settings["legacy_app_id"], True
+                    elif status == 404:
                         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
-                    if status >= 500:
+                    elif status >= 500:
                         return jsonify({"error": "Servicio de autenticación no disponible"}), 503
-                    return jsonify({"error": "No se pudo iniciar sesión"}), 502
-                if (resolved or {}).get("app_key") not in (None, "", app_id):
+                    else:
+                        return jsonify({"error": "No se pudo iniciar sesión"}), 502
+                elif (resolved or {}).get("app_key") not in (None, "", app_id):
                     logger.error("resolve-tenant devolvió otra app; no se usa")
                     return jsonify({"error": "No se pudo iniciar sesión"}), 502
-                tenant_id = resolved["tenant_key"]
+                else:
+                    tenant_id = resolved["tenant_key"]
 
             tokens, err = aegis_password_login(identifier, password, tenant_id=tenant_id, app_id=app_id)
             if err:
@@ -298,7 +306,7 @@ def login(mongo, identifier, password, requested_org_id=None):
 
             debe_cambiar = bool(tokens.get("must_change_password") or profile.get("must_change_password"))
             acceso = None
-            if not debe_cambiar:
+            if not debe_cambiar and not legacy:
                 acceso, acceso_err = aegis_get_access(access_token, tenant_id=tenant_id, app_id=app_id)
                 if _pide_cambio(acceso_err):
                     debe_cambiar = True
@@ -364,7 +372,8 @@ def login(mongo, identifier, password, requested_org_id=None):
                     }), 403
 
             rol_local = usuario.get("role")
-            rol = acotar(rol_local, (acceso or {}).get("roles"))
+            # En modo migración (app anterior) el rol es el de Mongo, como antes.
+            rol = rol_local if legacy else acotar(rol_local, (acceso or {}).get("roles"))
             if rol is None:
                 return jsonify({"error": "Perfil de acceso no reconocido."}), 403
             usuario = dict(usuario)

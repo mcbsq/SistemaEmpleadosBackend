@@ -107,6 +107,9 @@ def _renovar_aegis(mongo, claims, emitir_sesion, sesion):
     if not guardado:
         return jsonify({"error": "La sesión se está renovando. Intenta de nuevo."}), 503
 
+    from core.migracion_aegis import es_sesion_legacy
+    if es_sesion_legacy(sesion):
+        return _emitir_vigente(mongo, claims, emitir_sesion, sid)
     acceso, acceso_err = aegis_get_access(
         tokens.get("access_token"), tenant_id=sesion.get("org_id"), app_id=APP_KEY,
     )

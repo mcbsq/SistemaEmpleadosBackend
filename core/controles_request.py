@@ -157,6 +157,9 @@ def _revalidar_acceso(mongo, sesion, ruta):
         return None
     if ruta in _CON_CLAVE or acceso_en_cache(sesion) or sesion.get("must_change_password"):
         return None
+    from core.migracion_aegis import es_sesion_legacy
+    if es_sesion_legacy(sesion):
+        return None
     token = sesion.get("access_token")
     if not token:
         revocar(mongo, sesion["sid"])
