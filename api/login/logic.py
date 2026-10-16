@@ -26,6 +26,7 @@ from core.aegis_client import (
 )
 from core.contrasena import contrasena_aceptable
 from core.cookies_sesion import fijar
+from core.cliente_nativo import es_cliente_nativo
 from core.designacion_admin import designar_si_corresponde
 from core.perfiles_aegis import APP_KEY, clasificar_perfiles, misma_empresa_y_app
 from core.permissions import PERMISOS_DEFAULT, DASHBOARD_MODULOS, get_permisos_for_role
@@ -143,6 +144,10 @@ def _issue_token_response(
     plataforma = bool(usuario.get("plataforma")) and role == "SUPER_ADMIN"
     if incluir_jwt is None:
         incluir_jwt = not get_aegis_settings()["login_enabled"]
+    # La app móvil sí recibe el JWT (ligado a la misma sesión del servidor);
+    # el navegador no (vive en cookie HttpOnly). Ver core/cliente_nativo.py.
+    if es_cliente_nativo():
+        incluir_jwt = True
 
     claims = {
         "plataforma":          plataforma,
@@ -192,6 +197,9 @@ def _issue_token_response(
         "must_change_password": must_change_password,
         "plataforma":           plataforma,
         "session_expires_at":   sesion.get("expira_en"),
+        # La app solo ofrece la llave de dispositivo (huella) si el backend
+        # la acepta; con Aegis la identidad no se delega a esa llave.
+        "dispositivos":         not get_aegis_settings()["login_enabled"],
         "csrf_token":           sesion.get("csrf"),
     }
     if incluir_jwt:

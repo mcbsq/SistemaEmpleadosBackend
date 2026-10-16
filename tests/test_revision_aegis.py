@@ -419,3 +419,41 @@ def test_login_directo_tambien_trata_el_403_de_cambio(monkeypatch):
     assert status == 200
     assert resp.get_json()["must_change_password"] is True
     assert "access_token" not in resp.get_json()
+
+
+def _acceso_ok(*_a, **_k):
+    return _acceso(["user"]), None
+
+
+def test_app_movil_recibe_jwt_ligado_a_la_sesion_y_puede_usarlo(monkeypatch):
+    _parchear(monkeypatch, _acceso_ok)
+    mongo = FakeMongo()
+    mongo.db.raw.usuario.insert_one({"user": "ana@acme.test", "email": "ana@acme.test", "role": "EMPLOYEE",
+                                     "org_id": "acme", "aegis_user_id": USUARIO, "aegis_tenant_id": TENANT, "activo": True})
+    app = _app(mongo)
+    cliente = app.test_client()
+    movil = {"X-Cliente": "empleados-movil"}
+    r = cliente.post("/login", json={"user": "ana@acme.test", "password": "Segura123!"}, headers=movil)
+    cuerpo = r.get_json()
+    assert r.status_code == 200, cuerpo
+    assert "access_token" in cuerpo and cuerpo["dispositivos"] is False
+    token = cuerpo["access_token"]
+    # El token sirve como Bearer sin cookie ni CSRF (la app no tiene document).
+    limpio = app.test_client()
+    r = limpio.post("/nota", json={}, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.get_json()
+
+
+def test_navegador_no_recibe_jwt_aunque_imite_el_encabezado_de_la_app(monkeypatch):
+    _parchear(monkeypatch, _acceso_ok)
+    mongo = FakeMongo()
+    mongo.db.raw.usuario.insert_one({"user": "ana@acme.test", "email": "ana@acme.test", "role": "EMPLOYEE",
+                                     "org_id": "acme", "aegis_user_id": USUARIO, "aegis_tenant_id": TENANT, "activo": True})
+    app = _app(mongo)
+    r = app.test_client().post("/login", json={"user": "ana@acme.test", "password": "Segura123!"},
+                               headers={"X-Cliente": "empleados-movil", "Origin": "https://malo.example"})
+    assert r.status_code in (200, 403)
+    assert "access_token" not in (r.get_json() or {})
+    # Y el mismo login sin el encabezado de la app tampoco lo recibe.
+    r = app.test_client().post("/login", json={"user": "ana@acme.test", "password": "Segura123!"})
+    assert r.status_code == 200 and "access_token" not in r.get_json()
