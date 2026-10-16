@@ -285,7 +285,9 @@ def login(mongo, identifier, password, requested_org_id=None):
             tokens, err = aegis_password_login(identifier, password, tenant_id=tenant_id, app_id=app_id)
             if err:
                 _body, status = err
-                if status in (401, 403, 404):
+                # 422: Aegis rechazó el formato (p. ej. contraseña demasiado corta);
+                # para quien escribe es lo mismo que una contraseña incorrecta.
+                if status in (401, 403, 404, 422):
                     return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
                 if status == 429:
                     return jsonify({"error": "Demasiadas solicitudes. Intenta más tarde."}), 429
