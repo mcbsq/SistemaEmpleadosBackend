@@ -12,6 +12,7 @@ from flask import jsonify
 import logging
 
 from core.audit import registrar_auditoria
+from core.identidad import identidad_de
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ def get_parametros_route(mongo, org_id="default"):
 
 
 def guardar_parametros(mongo, org_id, data, identity):
+    identity = identidad_de(identity)
     antes = get_parametros(mongo, org_id)
 
     isr_tabla = data.get("isr_tabla")
@@ -360,6 +362,7 @@ def listar_horas_extra(mongo, filtros, solo_empleados=None):
 
 
 def registrar_horas_extra(mongo, data, identity, solo_empleados=None):
+    identity = identidad_de(identity)
     params = get_parametros(mongo)
     if not params.get("horas_extra_habilitadas", True):
         return jsonify({"error": "Las horas extra están desactivadas en los parámetros de nómina"}), 400
@@ -406,6 +409,7 @@ def registrar_horas_extra(mongo, data, identity, solo_empleados=None):
 
 
 def resolver_horas_extra(mongo, registro_id, data, identity):
+    identity = identidad_de(identity)
     estado = data.get("estado")
     if estado not in ("aprobada", "rechazada"):
         return jsonify({"error": "estado debe ser aprobada o rechazada"}), 400

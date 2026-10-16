@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from flask import g, jsonify, request
 
+from core.identidad import instalar
 from core.perfiles_aegis import APP_KEY, clasificar_perfiles, misma_empresa_y_app
 from core.rol_efectivo import acotar
 from core.sesiones import acceso_en_cache, fijar_rol, marcar_acceso, obtener, revocar
@@ -81,6 +82,7 @@ def aplicar(mongo, claims):
     """
     if request.method == "OPTIONS":
         return None
+    instalar()
     ruta = request.path or ""
     # El origen se revisa también en el login. Un 403 aquí no es solo CORS.
     origen = _origen_permitido()

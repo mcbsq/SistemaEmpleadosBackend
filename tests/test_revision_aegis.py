@@ -316,6 +316,9 @@ def test_refresh_5xx_no_revoca_y_no_reutiliza_el_par_viejo(monkeypatch):
     guardada = mongo.db.sesiones.find_one({"sid": sesion["sid"]})
     assert guardada["revocada"] is not True
     assert guardada["refresh_token"] == "refresh-2"
+    assert guardada["acceso_pendiente"] is True
+    from core.sesiones import acceso_en_cache
+    assert acceso_en_cache(guardada, segundos=60) is False
     vigente = obtener(mongo, sesion["sid"])
     with app.test_request_context():
         _resp2, status2 = _renovar_aegis(
@@ -457,3 +460,189 @@ def test_navegador_no_recibe_jwt_aunque_imite_el_encabezado_de_la_app(monkeypatc
     # Y el mismo login sin el encabezado de la app tampoco lo recibe.
     r = app.test_client().post("/login", json={"user": "ana@acme.test", "password": "Segura123!"})
     assert r.status_code == 200 and "access_token" not in r.get_json()
+
+
+def test_perdedor_no_emite_negocio_mientras_el_acceso_esta_pendiente(monkeypatch):
+    monkeypatch.setattr(
+        "api.login.sesion.aegis_refresh",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe llamar")),
+    )
+    mongo = FakeMongo()
+    mongo.db.usuario.insert_one({"user": "ana", "org_id": "acme", "role": "SUPER_ADMIN", "activo": True})
+    sesion = crear(
+        mongo, user="ana", org_id="acme",
+        claims={"user": "ana", "role": "SUPER_ADMIN", "org_id": "acme", "plataforma": True},
+        aegis={"access_token": "a", "refresh_token": "r", "user_id": USUARIO, "tenant_id": TENANT},
+        minutos=15,
+    )
+    mongo.db.sesiones.update_one(
+        {"sid": sesion["sid"]},
+        {"$set": {"gen": 1, "acceso_pendiente": True, "auth_checked_at": None, "refresh_token": "nuevo"}},
+    )
+    emitidos = []
+
+    def emitir(*_a, **_k):
+        emitidos.append(1)
+        return jsonify({"ok": True}), 200
+
+    app = Flask(__name__)
+    with app.test_request_context():
+        _resp, status = _renovar_aegis(
+            mongo, {"user": "ana", "org_id": "acme", "role": "SUPER_ADMIN"}, emitir, sesion,
+        )
+    assert status == 503
+    assert emitidos == []
+    assert mongo.db.sesiones.find_one({"sid": sesion["sid"]})["revocada"] is not True
+
+
+def test_negocio_no_entra_con_la_cache_pendiente(monkeypatch):
+    monkeypatch.setattr("core.aegis_config.get_aegis_settings", lambda: _ajustes())
+    monkeypatch.setattr(
+        "core.aegis_client.aegis_get_access",
+        lambda *a, **k: (None, ({"error": "caido"}, 503)),
+    )
+    mongo = FakeMongo()
+    sesion = crear(
+        mongo, user="ana", org_id="acme",
+        claims={"user": "ana", "role": "SUPER_ADMIN", "org_id": "acme"},
+        aegis={"access_token": "nuevo", "refresh_token": "r", "user_id": USUARIO, "tenant_id": TENANT},
+        minutos=15,
+    )
+    mongo.db.sesiones.update_one(
+        {"sid": sesion["sid"]},
+        {"$set": {"acceso_pendiente": True, "auth_checked_at": None}},
+    )
+    from core.sesiones import acceso_en_cache
+    assert acceso_en_cache(mongo.db.sesiones.find_one({"sid": sesion["sid"]}), segundos=60) is False
+    app = Flask(__name__)
+    with app.test_request_context("/empleados", method="GET"):
+        bloqueo = aplicar(mongo, {"sid": sesion["sid"], "user": "ana", "org_id": "acme", "role": "SUPER_ADMIN"})
+    assert bloqueo[1] == 503
+
+
+def test_dos_renovaciones_la_segunda_espera_el_acceso(monkeypatch):
+    import threading
+    entro = threading.Event()
+    sigue = threading.Event()
+    emitidos = []
+
+    def refrescar(*_a, **_k):
+        return {"access_token": "acceso-2", "refresh_token": "refresh-2"}, None
+
+    def acceso(*_a, **_k):
+        entro.set()
+        assert sigue.wait(3)
+        return _acceso(["user"]), None
+
+    monkeypatch.setattr("api.login.sesion.aegis_refresh", refrescar)
+    monkeypatch.setattr("api.login.sesion.aegis_get_access", acceso)
+    monkeypatch.setattr("api.login.sesion.get_aegis_settings", lambda: _ajustes())
+    mongo = FakeMongo()
+    mongo.db.usuario.insert_one({"user": "ana", "org_id": "acme", "role": "SUPER_ADMIN", "activo": True})
+    sesion = crear(
+        mongo, user="ana", org_id="acme",
+        claims={"user": "ana", "role": "SUPER_ADMIN", "org_id": "acme"},
+        aegis={"access_token": "a", "refresh_token": "r", "user_id": USUARIO, "tenant_id": TENANT},
+        minutos=15,
+    )
+    app = Flask(__name__)
+    codigos = []
+
+    def emitir(*_a, **_k):
+        emitidos.append(1)
+        return jsonify({"ok": True}), 200
+
+    def correr():
+        with app.app_context():
+            with app.test_request_context():
+                _resp, status = _renovar_aegis(
+                    mongo, {"user": "ana", "org_id": "acme"}, emitir, dict(sesion),
+                )
+                codigos.append(status)
+
+    hilos = [threading.Thread(target=correr) for _ in range(2)]
+    for hilo in hilos:
+        hilo.start()
+    assert entro.wait(3)
+    import time
+    limite = time.time() + 2
+    while 503 not in codigos and time.time() < limite:
+        time.sleep(0.02)
+    assert 503 in codigos
+    assert emitidos == []
+    sigue.set()
+    for hilo in hilos:
+        hilo.join(3)
+    assert sorted(codigos) == [200, 503]
+    assert emitidos == [1]
+    guardada = mongo.db.sesiones.find_one({"sid": sesion["sid"]})
+    assert guardada["acceso_pendiente"] is False
+    assert guardada["refresh_token"] == "refresh-2"
+
+
+def test_listado_usa_el_rol_de_la_sesion_y_no_el_jwt(monkeypatch):
+    from flask_jwt_extended import create_access_token, decode_token
+    from api.empleados.routes import setup_empleados_routes
+    from api.analitica.routes import setup_analitica_routes
+
+    monkeypatch.setattr("core.aegis_config.get_aegis_settings", lambda: _ajustes())
+    monkeypatch.setattr("core.aegis_client.aegis_get_access", lambda *a, **k: (_acceso(["user"]), None))
+    previo = os.environ.get("AEGIS_ACCESS_CACHE_SECONDS")
+    os.environ["AEGIS_ACCESS_CACHE_SECONDS"] = "0"
+    mongo = FakeMongo()
+    ana = mongo.db.empleados.insert_one({"Nombre": "Ana", "depto_id": "ventas"}).inserted_id
+    luis = mongo.db.empleados.insert_one({"Nombre": "Luis", "depto_id": "compras"}).inserted_id
+    sesion = crear(
+        mongo, user="ana", org_id="acme",
+        claims={
+            "user": "ana", "role": "SUPER_ADMIN", "org_id": "acme", "plataforma": True,
+            "empleado_id": str(ana), "areas_administradas": ["ventas", "compras"],
+        },
+        aegis={"access_token": "a", "refresh_token": "r", "user_id": USUARIO, "tenant_id": TENANT},
+        rol_local="SUPER_ADMIN", minutos=15,
+    )
+    app = Flask(__name__)
+    app.config["JWT_SECRET_KEY"] = "test-secret-that-is-longer-than-thirty-two-bytes"
+    app.config["JWT_TOKEN_LOCATION"] = ["headers", "cookies"]
+    app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+    JWTManager(app)
+    setup_empleados_routes(app, mongo)
+    setup_analitica_routes(app, mongo)
+
+    @app.before_request
+    def _contexto():
+        g.org_id = None
+        g.contexto_privado = False
+        g.sesion_servidor = None
+        claims = None
+        try:
+            verify_jwt_in_request(optional=True)
+            claims = get_jwt()
+        except Exception:
+            claims = None
+        return aplicar(mongo, claims)
+
+    with app.app_context():
+        token = create_access_token(identity="ana", additional_claims={
+            "user": "ana", "role": "SUPER_ADMIN", "org_id": "acme", "sid": sesion["sid"],
+            "empleado_id": str(ana), "plataforma": True,
+            "areas_administradas": ["ventas", "compras"],
+        })
+    cliente = app.test_client()
+    cliente.set_cookie("access_token_cookie", token)
+    cliente.set_cookie("empleados_sid", sesion["sid"])
+    try:
+        lista = cliente.get("/empleados")
+        assert lista.status_code == 200, lista.get_json()
+        assert [fila["Nombre"] for fila in lista.get_json()] == ["Ana"]
+        with app.app_context():
+            assert decode_token(token)["role"] == "SUPER_ADMIN"
+        assert cliente.get(f"/empleados/{luis}").status_code == 403
+        assert cliente.delete(f"/empleados/{ana}").status_code == 403
+        assert cliente.get("/analitica/reportes/headcount/datos").status_code == 403
+        assert mongo.db.sesiones.find_one({"sid": sesion["sid"]})["rol_efectivo"] == "EMPLOYEE"
+    finally:
+        if previo is None:
+            os.environ.pop("AEGIS_ACCESS_CACHE_SECONDS", None)
+        else:
+            os.environ["AEGIS_ACCESS_CACHE_SECONDS"] = previo

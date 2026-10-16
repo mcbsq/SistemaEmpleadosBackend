@@ -4,6 +4,7 @@ from flask import request, jsonify
 from flask_jwt_extended import get_jwt
 
 from api.auth_decorators import require_roles, require_self_or_roles
+from core.identidad import identidad_de
 from .logic import (
     get_parametros_route, guardar_parametros, calcular_nomina,
     calcular_aguinaldo, reporte_aguinaldos,
@@ -26,6 +27,7 @@ def setup_nomina_routes(app, mongo):
 
     def _equipo(claims):
         """None = sin restricción; un JEFE_AREA solo ve/registra a su equipo directo."""
+        claims = identidad_de(claims)
         if claims.get("role") != "JEFE_AREA":
             return None
         from api.empleados.logic import _equipo_directo_ids

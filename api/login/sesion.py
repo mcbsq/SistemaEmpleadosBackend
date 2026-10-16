@@ -68,7 +68,7 @@ def _renovar_aegis(mongo, claims, emitir_sesion, sesion):
     """
     Lease en Mongo antes de Aegis. El par nuevo se guarda antes de /v1/access.
     401/403 explícitos revocan. 429, 5xx y red dejan la sesión y responden 503.
-    El perdedor del lease adopta la generación ganadora y no revoca.
+    El perdedor no emite negocio mientras la generación nueva no tenga acceso.
     """
     if sesion.get("must_change_password"):
         return jsonify({"error": "Debes cambiar la contraseña antes de continuar."}), 403
@@ -80,6 +80,8 @@ def _renovar_aegis(mongo, claims, emitir_sesion, sesion):
         if not cruda or cruda.get("revocada"):
             return jsonify({"error": "Tu sesión ya no es válida. Inicia sesión de nuevo."}), 401
         if cruda.get("gen", 0) != gen:
+            if cruda.get("acceso_pendiente") or not cruda.get("auth_checked_at"):
+                return jsonify({"error": "La sesión se está renovando. Intenta de nuevo."}), 503
             return _emitir_vigente(mongo, claims, emitir_sesion, sid)
         return jsonify({"error": "La sesión se está renovando. Intenta de nuevo."}), 503
 
@@ -130,6 +132,7 @@ def _renovar_aegis(mongo, claims, emitir_sesion, sesion):
         return jsonify({"error": "El acceso a Empleados no está disponible para esta cuenta."}), 403
     if efectivo != vigente.get("rol_efectivo"):
         fijar_rol(mongo, vigente, efectivo)
+    marcar_acceso(mongo, sid)
     return _emitir_vigente(mongo, claims, emitir_sesion, sid)
 
 

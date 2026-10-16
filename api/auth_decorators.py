@@ -18,13 +18,8 @@ ROL_RH = "RH"
 
 def rol_de_identidad(identity):
     """Rol de la sesión de servidor si ya se acotó; si no, el del JWT."""
-    from flask import g
-    sesion = getattr(g, "sesion_servidor", None)
-    if isinstance(sesion, dict) and sesion.get("rol_efectivo"):
-        return sesion["rol_efectivo"]
-    if isinstance(identity, dict):
-        return identity.get("role")
-    return None
+    from core.identidad import identidad_de
+    return identidad_de(identity).get("role")
 
 
 def rol_permitido(role, allowed_roles):

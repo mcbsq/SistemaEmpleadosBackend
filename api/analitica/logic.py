@@ -6,6 +6,7 @@
 from flask import jsonify, send_file
 
 from core.audit import registrar_auditoria
+from core.identidad import identidad_de
 from core.reportes import CATALOGO_REPORTES, GENERADORES, obtener_datos_reporte
 
 ROLES_TODOS = ("EMPLOYEE", "JEFE_AREA", "CONTADOR", "PROJECT_MANAGER", "MEDICO")
@@ -27,6 +28,7 @@ def catalogo_para_rol(mongo, role):
 
 
 def get_catalogo_route(mongo, identity):
+    identity = identidad_de(identity)
     role = identity.get("role") if isinstance(identity, dict) else None
     return jsonify(catalogo_para_rol(mongo, role)), 200
 
@@ -70,6 +72,7 @@ def _puede(role, permisos, reporte_id):
 
 
 def resumen_sistema(mongo, identity):
+    identity = identidad_de(identity)
     role = identity.get("role") if isinstance(identity, dict) else None
     permisos = get_permisos(mongo)
     es_admin = role in ("ADMIN", "SUPER_ADMIN", "RH")
@@ -158,6 +161,7 @@ def resumen_sistema(mongo, identity):
 
 
 def _tiene_acceso_reporte(mongo, identity, reporte_id):
+    identity = identidad_de(identity)
     role = identity.get("role") if isinstance(identity, dict) else None
     if role in ("ADMIN", "SUPER_ADMIN", "RH"):
         return True
@@ -180,6 +184,7 @@ def ver_reporte(mongo, reporte_id, identity):
 
 
 def exportar_reporte(mongo, reporte_id, identity):
+    identity = identidad_de(identity)
     role = identity.get("role") if isinstance(identity, dict) else None
     if role not in ("ADMIN", "SUPER_ADMIN", "RH"):
         permisos = get_permisos(mongo)

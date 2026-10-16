@@ -6,6 +6,7 @@ import json
 import logging
 
 from core.audit import registrar_auditoria, diff_documentos
+from core.identidad import identidad_de
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -70,6 +71,7 @@ def _areas_admin(identity):
 # --- CREATE ---
 def create_empleado(mongo, identity=None):
     try:
+        identity = identidad_de(identity)
         data = request.json
         if not data:
             return jsonify({'message': 'No se recibió un cuerpo JSON válido'}), 400
@@ -143,6 +145,7 @@ def _empleado_ids_super_admin(mongo):
 
 def get_empleados(mongo, identity=None):
     try:
+        identity = identidad_de(identity)
         query = {"estado": {"$nin": ["pendiente", "baja"]}}
 
         role = identity.get('role') if isinstance(identity, dict) else None
@@ -191,6 +194,7 @@ def get_empleados(mongo, identity=None):
 # --- GET POR ID ---
 def get_empleado(id, mongo, identity=None):
     try:
+        identity = identidad_de(identity)
         empleado = mongo.db.empleados.find_one({'_id': ObjectId(id)})
         if not empleado:
             return jsonify({'message': 'Empleado no encontrado'}), 404
@@ -224,6 +228,7 @@ _COLECCIONES_HIJAS = {
 
 # --- DELETE ---
 def delete_empleado(id, mongo, identity=None):
+    identity = identidad_de(identity)
     # Sin cambios en la restricción de rol: ya limitado a SUPER_ADMIN en la ruta.
     try:
         eid = ObjectId(id)
@@ -256,6 +261,7 @@ def delete_empleado(id, mongo, identity=None):
 # --- UPDATE ---
 def update_empleado(id, mongo, identity=None):
     try:
+        identity = identidad_de(identity)
         data = request.json
         if not data:
             return jsonify({'message': 'Datos no proporcionados'}), 400

@@ -70,12 +70,22 @@ Política de este árbol, sin marcar el producto como listo:
   El front lo guarda en memoria. No lo lee de `document.cookie`.
 - Un `Origin` presente que no esté en la lista recibe HTTP 403, también
   en el login. No basta con que el navegador oculte la respuesta por CORS.
-- Con el front y el API en hosts distintos, `SameSite=Lax` no adjunta la
-  cookie en `fetch`. Antes de desplegar hay que servir el API en el mismo
-  sitio (proxy) o fijar `SameSite=None` y `Secure` en HTTPS.
+- Hosts distintos no son, por sí solos, sitios distintos. Dos subdominios
+  HTTPS del mismo dominio registrable pueden usar `SameSite=Lax` con
+  `credentials: include` y la lista CORS explícita. En cambio,
+  `https://cibercomrh.com` y un API bajo `https://redcibercom.cloud` sí son
+  sitios distintos.
+- El `REACT_APP_API_URL` de desarrollo local es `http://localhost:5001`.
+  El hostname de producción hay que confirmarlo antes de elegir la política.
+  La preferencia es un proxy del mismo origen o del mismo sitio. `SameSite=None`
+  y `Secure` cubren el caso entre sitios en algunos navegadores, sin
+  garantizar que acepten cookies de terceros. No se amplía `Domain`.
 
 ## Índices
 
 `python scripts/migracion_indices_aegis.py` solo imprime los índices.
-No abre la base. Aplicarlos exige `APLICAR_INDICES_DESECHABLE=1` y una
-`MONGO_URI` que no sea la de producción. Esta entrega no lo ejecuta.
+Son parciales: un usuario sin UUID y una solicitud sin clave de idempotencia
+no entran al índice único. No abre la base. Aplicarlos exige
+`APLICAR_INDICES_DESECHABLE=1` y una `MONGO_URI` local cuyo nombre contenga
+`desechable`. Si hay duplicados, los informa y no los borra. Esta entrega
+no lo ejecuta sobre la base del proyecto.

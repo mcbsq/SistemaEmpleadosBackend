@@ -143,7 +143,6 @@ def rotar(mongo, sid, gen, tokens, must_change_password=False, minutos=None):
         "access_token": tokens.get("access_token"),
         "refresh_token": tokens.get("refresh_token"),
         "must_change_password": bool(must_change_password),
-        "auth_checked_at": momento.isoformat(),
         "lease_hasta": None,
         "lease_dueno": None,
     }
@@ -192,7 +191,11 @@ def soltar_lease(mongo, sid, dueno):
 
 
 def confirmar_par(mongo, sid, gen, dueno, tokens, minutos, must_change_password=False):
-    """Guarda el par nuevo antes de consultar /v1/access. Así un 5xx no reutiliza el refresh viejo."""
+    """
+    Guarda el par nuevo antes de consultar /v1/access para no reutilizar el
+    refresh viejo. No renueva la caché de autorización: esa decisión sigue
+    pendiente hasta que /v1/access responda de forma coherente.
+    """
     momento = ahora()
     expira = (momento + timedelta(minutes=int(minutos or 15))).isoformat()
     resultado = _col(mongo).update_one(
@@ -202,7 +205,8 @@ def confirmar_par(mongo, sid, gen, dueno, tokens, minutos, must_change_password=
             "access_token": tokens.get("access_token"),
             "refresh_token": tokens.get("refresh_token"),
             "must_change_password": bool(must_change_password),
-            "auth_checked_at": momento.isoformat(),
+            "auth_checked_at": None,
+            "acceso_pendiente": True,
             "expira_en": expira,
             "lease_hasta": None,
             "lease_dueno": None,
@@ -228,6 +232,10 @@ def fijar_rol(mongo, sesion, rol):
         return
     claims = dict(sesion.get("claims") or {})
     claims["role"] = rol
+    if rol != "SUPER_ADMIN":
+        claims["plataforma"] = False
+    if rol != "ADMIN":
+        claims["areas_administradas"] = []
     _col(mongo).update_one(
         {"sid": sesion.get("sid")},
         {"$set": {"rol_efectivo": rol, "claims": claims}},
@@ -237,15 +245,16 @@ def fijar_rol(mongo, sesion, rol):
 
 
 def marcar_acceso(mongo, sid):
+    """Solo después de un /v1/access exitoso y coherente."""
     _col(mongo).update_one(
         {"sid": sid, "revocada": {"$ne": True}},
-        {"$set": {"auth_checked_at": ahora().isoformat()}},
+        {"$set": {"auth_checked_at": ahora().isoformat(), "acceso_pendiente": False}},
     )
 
 
 def acceso_en_cache(sesion, ahora=None, segundos=None):
     """True si la última decisión de acceso todavía está dentro de la ventana."""
-    if not sesion or not sesion.get("auth_checked_at"):
+    if not sesion or sesion.get("acceso_pendiente") or not sesion.get("auth_checked_at"):
         return False
     segundos = segundos_cache_acceso() if segundos is None else segundos
     momento = ahora if ahora is not None else globals()["ahora"]()
