@@ -65,8 +65,8 @@ def _desactivar_cuentas(mongo, empleado_id, motivo):
         revocar_de_usuario(mongo, u.get("user"), getattr(g, "org_id", None) or u.get("org_id"), motivo)
         if u.get("aegis_user_id"):
             try:
-                from core.aegis_client import aegis_admin_set_active
-                err = aegis_admin_set_active(str(u["aegis_user_id"]), False, tenant_id=getattr(g, "org_id", None))
+                from core.aegis_client import aegis_admin_retirar_acceso_producto
+                err = aegis_admin_retirar_acceso_producto(str(u["aegis_user_id"]), tenant_id=getattr(g, "org_id", None))
                 if err:
                     logger.warning("No se pudo desactivar en Aegis a %s: %s", u.get("user"), err)
             except Exception as e:  # Aegis caído no debe impedir la baja
@@ -78,8 +78,8 @@ def _reactivar_cuentas(mongo, empleado_id):
         mongo.db.usuario.update_one({"_id": u["_id"]}, {"$set": {"activo": True}})
         if u.get("aegis_user_id"):
             try:
-                from core.aegis_client import aegis_admin_set_active
-                aegis_admin_set_active(str(u["aegis_user_id"]), True, tenant_id=getattr(g, "org_id", None))
+                from core.aegis_client import aegis_admin_asignar_acceso_producto
+                aegis_admin_asignar_acceso_producto(str(u["aegis_user_id"]), tenant_id=getattr(g, "org_id", None))
             except Exception as e:
                 logger.warning("Aegis no disponible al reactivar a %s: %s", u.get("user"), e)
 

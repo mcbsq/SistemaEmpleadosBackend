@@ -25,24 +25,46 @@ def _auth_headers(access_token: str) -> dict:
     }
 
 
-def _admin_headers(tenant_id: Optional[str] = None) -> dict:
+def alcance_de_clave(tenant_id: Optional[str] = None) -> Optional[Tuple[dict, int]]:
     """
-    Cabeceras para la Admin API (sin Bearer de usuario; usa ApiKey de servicio).
-    `tenant_id` debe ser el tenant REAL de la empresa sobre la que se está
-    operando (g.org_id del request) — antes esto siempre mandaba el tenant
-    estático "cibercom" sin importar de qué empresa era el usuario, así que
-    crear/resetear/desactivar cuentas de cualquier empresa cliente en Aegis
-    quedaba silenciosamente aplicado al tenant equivocado (o fallaba 404/401
-    si esa identidad vivía en otro tenant). Cae a la config estática solo si
-    no se pasa nada, para no romper el flujo legacy de cibercom.
+    La API key configurada pertenece al tenant de AEGIS_TENANT_ID.
+    Mandar otro X-Tenant-Id no amplía ese alcance: la llamada se rechaza
+    aquí, antes de salir, para no presentar la clave como si fuera global.
     """
     s = get_aegis_settings()
+    clave = (s.get("tenant_id") or "").strip()
+    pedido = (tenant_id or clave).strip()
+    if pedido and clave and pedido != clave:
+        logger.warning("Clave técnica fuera de su tenant configurado")
+        return ({
+            "error": "La clave técnica de Empleados no cubre esa empresa. "
+                     "Cambiar el tenant no amplía su alcance.",
+        }, 403)
+    return None
+
+
+def _admin_headers(tenant_id: Optional[str] = None) -> dict:
+    """Cabeceras de la Admin API. El tenant es el de la clave, no uno arbitrario."""
+    s = get_aegis_settings()
     return {
-        "X-Tenant-Id": tenant_id or s["tenant_id"],
+        "X-Tenant-Id": (tenant_id or s["tenant_id"] or "").strip(),
         "X-App-Id": s["app_id"],
         "Authorization": f"ApiKey {s['api_key']}",
         "Content-Type": "application/json",
     }
+
+
+def _cuerpo(respuesta):
+    """202 y 204 pueden venir vacíos. No se tratan como JSON inválido."""
+    if respuesta.status_code in (202, 204):
+        return {}
+    texto = respuesta.content or b""
+    if not texto.strip():
+        return {}
+    try:
+        return respuesta.json()
+    except Exception:
+        return {"detail": respuesta.text or respuesta.reason}
 
 
 def aegis_resolve_tenant(identifier: str, app: str) -> Tuple[Optional[dict], Optional[Tuple[Any, int]]]:
@@ -70,13 +92,8 @@ def aegis_resolve_tenant(identifier: str, app: str) -> Tuple[Optional[dict], Opt
         return None, ({"error": "Servicio de autenticación no disponible"}, 503)
 
     if r.status_code == 200:
-        return r.json(), None
-
-    try:
-        err_body = r.json()
-    except Exception:
-        err_body = {"detail": r.text or r.reason}
-    return None, (err_body, r.status_code)
+        return _cuerpo(r), None
+    return None, (_cuerpo(r), r.status_code)
 
 
 def aegis_password_login(
@@ -163,6 +180,9 @@ def aegis_admin_create_user(email: str, role: str = "empleado", tenant_id: Optio
     s = get_aegis_settings()
     if not s["admin_enabled"]:
         return None, ({"error": "AEGIS_API_KEY no configurada"}, 503)
+    fuera = alcance_de_clave(tenant_id)
+    if fuera:
+        return None, fuera
 
     url = f"{s['base_url']}/v1/admin/users"
     payload = {
@@ -207,6 +227,9 @@ def aegis_admin_reset_password(aegis_user_id: str, tenant_id: Optional[str] = No
     s = get_aegis_settings()
     if not s["admin_enabled"]:
         return None, ({"error": "AEGIS_API_KEY no configurada"}, 503)
+    fuera = alcance_de_clave(tenant_id)
+    if fuera:
+        return None, fuera
 
     url = f"{s['base_url']}/v1/admin/users/{aegis_user_id}/reset-password"
     try:
@@ -239,6 +262,9 @@ def aegis_admin_list_users(tenant_id: Optional[str] = None) -> Tuple[Optional[li
     s = get_aegis_settings()
     if not s["admin_enabled"]:
         return None, ({"error": "AEGIS_API_KEY no configurada"}, 503)
+    fuera = alcance_de_clave(tenant_id)
+    if fuera:
+        return None, fuera
 
     url = f"{s['base_url']}/v1/admin/users"
     users, offset, limit = [], 0, 200
@@ -278,6 +304,9 @@ def aegis_admin_set_active(aegis_user_id: str, is_active: bool, tenant_id: Optio
     s = get_aegis_settings()
     if not s["admin_enabled"]:
         return ({"error": "AEGIS_API_KEY no configurada"}, 503)
+    fuera = alcance_de_clave(tenant_id)
+    if fuera:
+        return fuera
 
     url = f"{s['base_url']}/v1/admin/users/{aegis_user_id}"
     try:
@@ -344,8 +373,122 @@ def aegis_change_password(
     if r.status_code in (200, 204):
         return None
 
+    return (_cuerpo(r), r.status_code)
+
+
+def aegis_get_access(access_token: str, tenant_id: Optional[str] = None, app_id: Optional[str] = None):
+    """GET /v1/access. La decisión tiene que ser de la misma empresa y app que /v1/me."""
+    s = get_aegis_settings()
+    url = f"{s['base_url']}/v1/access"
+    headers = _auth_headers(access_token)
+    headers["X-Tenant-Id"] = tenant_id or s["tenant_id"]
+    headers["X-App-Id"] = app_id or s["app_id"]
     try:
-        err_body = r.json()
-    except Exception:
-        err_body = {"detail": r.text or r.reason}
-    return (err_body, r.status_code)
+        r = requests.get(url, headers=headers, timeout=s["timeout"])
+    except requests.RequestException as e:
+        logger.error("Aegis /v1/access: error de red: %s", e)
+        return None, ({"error": "Servicio de autenticación no disponible"}, 503)
+    if r.status_code == 200:
+        return _cuerpo(r), None
+    return None, (_cuerpo(r), r.status_code)
+
+
+def aegis_refresh(refresh_token: str, tenant_id: Optional[str] = None, app_id: Optional[str] = None):
+    """POST /v1/auth/refresh. Hay que guardar el par nuevo; el anterior deja de servir."""
+    s = get_aegis_settings()
+    url = f"{s['base_url']}/v1/auth/refresh"
+    headers = {
+        "X-Tenant-Id": tenant_id or s["tenant_id"],
+        "X-App-Id": app_id or s["app_id"],
+        "Content-Type": "application/json",
+    }
+    try:
+        r = requests.post(
+            url, headers=headers, json={"refresh_token": refresh_token}, timeout=s["timeout"],
+        )
+    except requests.RequestException as e:
+        logger.error("Aegis refresh: error de red: %s", e)
+        return None, ({"error": "Servicio de autenticación no disponible"}, 503)
+    if r.status_code == 200:
+        return _cuerpo(r), None
+    return None, (_cuerpo(r), r.status_code)
+
+
+def aegis_logout(refresh_token: str, tenant_id: Optional[str] = None):
+    """POST /v1/auth/logout. 204 vacío es éxito. No registra el token."""
+    s = get_aegis_settings()
+    url = f"{s['base_url']}/v1/auth/logout"
+    headers = {
+        "X-Tenant-Id": tenant_id or s["tenant_id"],
+        "Content-Type": "application/json",
+    }
+    try:
+        r = requests.post(
+            url, headers=headers, json={"refresh_token": refresh_token}, timeout=s["timeout"],
+        )
+    except requests.RequestException as e:
+        logger.error("Aegis logout: error de red: %s", e)
+        return ({"error": "Servicio de autenticación no disponible"}, 503)
+    if r.status_code in (200, 204):
+        return None
+    return (_cuerpo(r), r.status_code)
+
+
+def aegis_password_reset_request(email: str, tenant_id: str):
+    """
+    POST /v1/auth/password-reset/request con el tenant de la liga conocida.
+    No llama a resolve-tenant. 202 vacío es éxito y no dice si la cuenta existe.
+    """
+    s = get_aegis_settings()
+    url = f"{s['base_url']}/v1/auth/password-reset/request"
+    headers = {"X-Tenant-Id": tenant_id, "Content-Type": "application/json"}
+    try:
+        r = requests.post(url, headers=headers, json={"email": email}, timeout=s["timeout"])
+    except requests.RequestException as e:
+        logger.error("Aegis password-reset request: error de red: %s", e)
+        return ({"error": "Servicio de autenticación no disponible"}, 503)
+    if r.status_code == 202:
+        return None
+    return (_cuerpo(r), r.status_code)
+
+
+def aegis_admin_retirar_acceso_producto(aegis_user_id: str, tenant_id: Optional[str] = None):
+    """Quita solo el acceso de esta app. No desactiva ni borra la identidad global."""
+    s = get_aegis_settings()
+    if not s["admin_enabled"]:
+        return ({"error": "AEGIS_API_KEY no configurada"}, 503)
+    fuera = alcance_de_clave(tenant_id)
+    if fuera:
+        return fuera
+    url = f"{s['base_url']}/v1/admin/users/{aegis_user_id}"
+    cuerpo = {"app_permissions_patch": {s["app_id"]: {"roles": [], "scopes": []}}}
+    try:
+        r = requests.patch(url, headers=_admin_headers(tenant_id), json=cuerpo, timeout=s["timeout"])
+    except requests.RequestException as e:
+        logger.error("Aegis retirar acceso: %s", e)
+        return ({"error": "Aegis admin no disponible"}, 503)
+    if r.status_code in (200, 204):
+        return None
+    return (_cuerpo(r), r.status_code)
+
+
+def aegis_admin_asignar_acceso_producto(
+    aegis_user_id: str, role: str = "empleado", tenant_id: Optional[str] = None,
+):
+    """Vuelve a asignar solo la app de Empleados. No toca is_active global."""
+    s = get_aegis_settings()
+    if not s["admin_enabled"]:
+        return ({"error": "AEGIS_API_KEY no configurada"}, 503)
+    fuera = alcance_de_clave(tenant_id)
+    if fuera:
+        return fuera
+    url = f"{s['base_url']}/v1/admin/users/{aegis_user_id}"
+    cuerpo = {"app_permissions_patch": {s["app_id"]: {"roles": [role], "scopes": ["users:read"]}}}
+    try:
+        r = requests.patch(url, headers=_admin_headers(tenant_id), json=cuerpo, timeout=s["timeout"])
+    except requests.RequestException as e:
+        logger.error("Aegis asignar acceso: %s", e)
+        return ({"error": "Aegis admin no disponible"}, 503)
+    if r.status_code in (200, 204):
+        return None
+    return (_cuerpo(r), r.status_code)

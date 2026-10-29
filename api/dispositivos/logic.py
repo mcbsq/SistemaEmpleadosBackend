@@ -79,6 +79,11 @@ def registrar(mongo, claims, data):
 
 def entrar(mongo, data, emitir_sesion):
     """Cambia la llave del dispositivo por una sesión nueva. La llave rota."""
+    from core.aegis_config import get_aegis_settings
+    if get_aegis_settings().get("login_enabled"):
+        return jsonify({
+            "error": "El acceso con dispositivo está deshabilitado. Inicia sesión con tu cuenta.",
+        }), 403
     dispositivo_id = str(data.get("dispositivo_id") or "")
     llave = str(data.get("llave") or "")
     try:
@@ -106,9 +111,11 @@ def entrar(mongo, data, emitir_sesion):
     resp, status = emitir_sesion(mongo, usuario, disp["user"], org_id=disp["org_id"])
     if status != 200:
         return resp, status
-    cuerpo = resp.get_json()
+    import json
+    cuerpo = resp.get_json() or {}
     cuerpo["llave"] = nueva
-    return jsonify(cuerpo), 200
+    resp.set_data(json.dumps(cuerpo))
+    return resp, status
 
 
 def revocar_de_usuario(mongo, user, org_id, motivo):

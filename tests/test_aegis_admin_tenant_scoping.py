@@ -180,8 +180,8 @@ def test_delete_usuario_deactivates_on_the_real_tenant(monkeypatch):
 
     monkeypatch.setattr("api.usuario.logic.get_aegis_settings", _aegis_settings_stub())
     monkeypatch.setattr(
-        "api.usuario.logic.aegis_admin_set_active",
-        lambda aegis_user_id, is_active, tenant_id=None: captured.update(tenant_id=tenant_id, is_active=is_active),
+        "api.usuario.logic.aegis_admin_retirar_acceso_producto",
+        lambda aegis_user_id, tenant_id=None: captured.update(tenant_id=tenant_id, retirado=True) or None,
     )
 
     app = Flask(__name__)
@@ -190,4 +190,4 @@ def test_delete_usuario_deactivates_on_the_real_tenant(monkeypatch):
         delete_usuario(mongo, str(doc_id))
 
     assert captured["tenant_id"] == "herramientas-y-moldes-industriales"
-    assert captured["is_active"] is False
+    assert captured["retirado"] is True

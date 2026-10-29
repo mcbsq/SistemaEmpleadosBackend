@@ -6,17 +6,13 @@
 #    guardan en el servidor (antes solo en el localStorage del admin).
 #  - Directorio: un empleado general ve de sus compañeros solo lo que su rol
 #    permite (contacto laboral, estado, puesto…), nunca lo personal.
-#  - "Olvidé mi contraseña": Aegis genera la temporal, se envía por correo y
-#    el token de esa sesión solo sirve para definir la nueva.
 from bson.objectid import ObjectId
 from flask import Flask
 from flask_jwt_extended import JWTManager, create_access_token
 
-from api.login import sesion
-from api.login.logic import _issue_token_response, _tras_cambio
 from api.perfil.routes import setup_perfil_routes
 from api.roles.routes import setup_roles_routes
-from core.permissions import PERMISOS_DEFAULT, get_permisos_for_role, rol_existe
+from core.permissions import get_permisos_for_role, rol_existe
 from core.visibilidad_perfil import tarjeta_directorio
 from tests.fakes import FakeMongo
 
@@ -139,58 +135,3 @@ def test_cadena_mando_tres_niveles_arriba():
     r = app.test_client().get(f"/perfil/{ids[3]}/cadena-mando",
                               headers={"Authorization": f"Bearer {_token(app, 'EMPLOYEE')}"})
     assert [n["Nombre"] for n in r.get_json()["directos"]] == ["N4"]
-
-
-# ─── Olvidé mi contraseña ────────────────────────────────────────────────────
-def _aegis(monkeypatch, temp="Temp-123"):
-    monkeypatch.setattr("core.aegis_config.get_aegis_settings",
-                        lambda: {"admin_enabled": True, "login_enabled": True})
-    monkeypatch.setattr("core.aegis_client.aegis_admin_reset_password", lambda uid, tenant_id=None: (temp, None))
-
-
-def test_recuperacion_resetea_en_aegis_y_envia_correo(monkeypatch):
-    enviados = []
-    _aegis(monkeypatch)
-    monkeypatch.setattr("core.mailer.mailer_enabled", lambda: True)
-    monkeypatch.setattr("core.mailer.send_temp_password_email",
-                        lambda to, user, temp, login_url=None, restablecida=False: enviados.append((to, temp, restablecida)) or True)
-    mongo = FakeMongo()
-    mongo.db.raw.usuario.insert_one({"user": "ana", "email": "ana@x.com", "org_id": "cibercom", "aegis_user_id": "a1"})
-    with Flask(__name__).test_request_context():
-        _, status = sesion.solicitar_recuperacion(mongo, {"identificador": "ana@x.com"}, "1.1.1.1")
-        assert status == 200
-        # Segunda solicitud inmediata: no vuelve a cambiarla.
-        sesion.solicitar_recuperacion(mongo, {"identificador": "ana@x.com"}, "1.1.1.2")
-    assert enviados == [("ana@x.com", "Temp-123", True)]
-    assert mongo.db.raw.usuario.find_one({"user": "ana"})["debe_cambiar_password"] is True
-
-
-def test_sin_correo_no_se_toca_la_contrasena(monkeypatch):
-    llamadas = []
-    monkeypatch.setattr("core.aegis_client.aegis_admin_reset_password", lambda *a, **k: llamadas.append(1) or ("t", None))
-    monkeypatch.setattr("core.mailer.mailer_enabled", lambda: False)
-    mongo = FakeMongo()
-    mongo.db.raw.usuario.insert_one({"user": "ana", "email": "ana@x.com", "org_id": "cibercom", "aegis_user_id": "a1"})
-    with Flask(__name__).test_request_context():
-        sesion.solicitar_recuperacion(mongo, {"identificador": "ana"}, "1.1.1.3")
-    assert llamadas == []
-    assert mongo.db.raw.recuperaciones.find_one({"user": "ana"})["atendida"] is False
-
-
-def test_token_temporal_y_cambio_emite_sesion_normal(monkeypatch):
-    monkeypatch.setattr("api.login.logic.verificar_fechas_especiales", lambda m: None)
-    monkeypatch.setattr("api.login.logic.get_session_minutes", lambda m, o: 15)
-    mongo = FakeMongo()
-    mongo.db.raw.usuario.insert_one({"user": "ana", "role": "EMPLOYEE", "org_id": "cibercom", "debe_cambiar_password": True})
-    usuario = mongo.db.raw.usuario.find_one({"user": "ana"})
-    app = Flask(__name__)
-    app.config["JWT_SECRET_KEY"] = "x" * 40
-    JWTManager(app)
-    with app.test_request_context():
-        resp, _ = _issue_token_response(mongo, usuario, "ana")
-        assert resp.get_json()["must_change_password"] is True
-        resp, status = _tras_cambio(mongo, usuario, {"user": "ana", "org_id": "cibercom", "pwd_temp": True})
-        data = resp.get_json()
-    assert status == 200 and data["access_token"] and data["must_change_password"] is False
-    assert "debe_cambiar_password" not in mongo.db.raw.usuario.find_one({"user": "ana"})
-    assert set(PERMISOS_DEFAULT["EMPLOYEE"]) <= set(data["permisos"])

@@ -43,11 +43,9 @@ def send_temp_password_email(
     login_user: str,
     temp_password: str,
     login_url: str = None,
-    restablecida: bool = False,
 ) -> bool:
     """
     Envía la contraseña temporal al correo del usuario recién creado/reseteado.
-    `restablecida`: la pidió la propia persona con "Olvidé mi contraseña".
     Retorna True si el correo salió; False si el envío está deshabilitado o
     falló (el llamador decide el fallback — normalmente devolver la contraseña
     en la respuesta HTTP para que el admin la entregue en mano).
@@ -63,18 +61,13 @@ def send_temp_password_email(
     use_tls = _truthy(os.environ.get("SMTP_TLS"), True)
 
     msg = EmailMessage()
-    msg["Subject"] = ("Restablecimiento de contraseña — CibercomHR" if restablecida
-                      else "Tu acceso a CibercomHR — contraseña temporal")
+    msg["Subject"] = "Tu acceso a CibercomHR — contraseña temporal"
     msg["From"] = sender
     msg["To"] = to_email
     access_url = login_url or build_tenant_login_url()
-    intro = ("Recibimos una solicitud para restablecer tu contraseña del sistema de empleados.\n"
-             "Tu contraseña anterior ya no funciona; entra con esta temporal.\n\n"
-             if restablecida else
-             "Se creó tu cuenta de acceso al sistema de empleados de Cibercom.\n\n")
     msg.set_content(
         f"Hola,\n\n"
-        f"{intro}"
+        f"Se creó tu cuenta de acceso al sistema de empleados de Cibercom.\n\n"
         f"  Usuario:              {login_user}\n"
         f"  Contraseña temporal:  {temp_password}\n\n"
         f"  Liga de acceso:        {access_url}\n\n"

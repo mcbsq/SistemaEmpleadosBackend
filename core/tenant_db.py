@@ -26,6 +26,10 @@ from __future__ import annotations
 import flask
 
 
+class ContextoEmpresaFaltante(RuntimeError):
+    """Una ruta privada consultó datos sin empresa resuelta."""
+
+
 def _org_id_actual():
     """org_id de la request en curso, o None si no hay uno resuelto todavía
     (rutas públicas, bootstrap de login, o código corriendo fuera de una
@@ -43,14 +47,37 @@ class _ColeccionMultiTenant:
     def __init__(self, coleccion):
         self._col = coleccion
 
+    def _exigir_contexto(self):
+        try:
+            privado = getattr(flask.g, "contexto_privado", False)
+        except RuntimeError:
+            return
+        if privado and _org_id_actual() is None:
+            raise ContextoEmpresaFaltante("falta el contexto de empresa")
+
     def _filtro(self, filtro):
+        self._exigir_contexto()
         org_id = _org_id_actual()
         filtro = dict(filtro) if filtro else {}
         if org_id is not None:
             filtro["org_id"] = org_id
         return filtro
 
+    def _sin_mudar_empresa(self, update):
+        org_id = _org_id_actual()
+        if org_id is None or not isinstance(update, dict):
+            return update
+        update = dict(update)
+        for clave in ("$set", "$setOnInsert"):
+            bloque = update.get(clave)
+            if isinstance(bloque, dict) and bloque.get("org_id") not in (None, org_id):
+                bloque = dict(bloque)
+                bloque.pop("org_id", None)
+                update[clave] = bloque
+        return update
+
     def _doc_con_org(self, documento):
+        self._exigir_contexto()
         documento = dict(documento) if documento else {}
         org_id = _org_id_actual()
         if org_id is not None:
@@ -81,11 +108,30 @@ class _ColeccionMultiTenant:
         return self._col.distinct(key, self._filtro(filtro), *args, **kwargs)
 
     def aggregate(self, pipeline=None, *args, **kwargs):
+        self._exigir_contexto()
         org_id = _org_id_actual()
         pipeline = list(pipeline or [])
         if org_id is not None:
-            pipeline = [{"$match": {"org_id": org_id}}] + pipeline
+            pipeline = [{"$match": {"org_id": org_id}}] + [
+                self._lookup_aislado(etapa, org_id) for etapa in pipeline
+            ]
         return self._col.aggregate(pipeline, *args, **kwargs)
+
+    def _lookup_aislado(self, etapa, org_id):
+        if not isinstance(etapa, dict) or "$lookup" not in etapa:
+            return etapa
+        lookup = dict(etapa["$lookup"])
+        if "pipeline" in lookup:
+            lookup["pipeline"] = [{"$match": {"org_id": org_id}}] + list(lookup["pipeline"])
+            return {"$lookup": lookup}
+        local = lookup.pop("localField", None)
+        foraneo = lookup.pop("foreignField", "_id")
+        lookup["let"] = {"fk": f"${local}" if local else None}
+        lookup["pipeline"] = [
+            {"$match": {"org_id": org_id}},
+            {"$match": {"$expr": {"$eq": [f"${foraneo}", "$$fk"]}}},
+        ]
+        return {"$lookup": lookup}
 
     # ── Escritura ────────────────────────────────────────────────────────
     def insert_one(self, documento, *args, **kwargs):
@@ -95,13 +141,19 @@ class _ColeccionMultiTenant:
         return self._col.insert_many([self._doc_con_org(d) for d in (documentos or [])], *args, **kwargs)
 
     def update_one(self, filtro, update, *args, **kwargs):
+        update = self._sin_mudar_empresa(update)
         return self._col.update_one(self._filtro(filtro), self._update_con_org_en_upsert(update, kwargs), *args, **kwargs)
 
     def update_many(self, filtro, update, *args, **kwargs):
+        update = self._sin_mudar_empresa(update)
         return self._col.update_many(self._filtro(filtro), self._update_con_org_en_upsert(update, kwargs), *args, **kwargs)
 
     def find_one_and_update(self, filtro, update, *args, **kwargs):
+        update = self._sin_mudar_empresa(update)
         return self._col.find_one_and_update(self._filtro(filtro), self._update_con_org_en_upsert(update, kwargs), *args, **kwargs)
+
+    def bulk_write(self, *args, **kwargs):
+        raise ContextoEmpresaFaltante("bulk_write no está aislado por empresa")
 
     def replace_one(self, filtro, reemplazo, *args, **kwargs):
         return self._col.replace_one(self._filtro(filtro), self._doc_con_org(reemplazo), *args, **kwargs)
@@ -112,9 +164,11 @@ class _ColeccionMultiTenant:
     def delete_many(self, filtro, *args, **kwargs):
         return self._col.delete_many(self._filtro(filtro), *args, **kwargs)
 
-    # Cualquier otro método (create_index, bulk_write, etc.) pasa directo a
-    # pymongo, SIN aislamiento — usar con criterio.
+    # create_index y el resto pasan directo. Las lecturas y escrituras de
+    # documentos van por los métodos de arriba. bulk_write está bloqueado.
     def __getattr__(self, nombre):
+        if nombre in ("bulk_write", "find_raw_batches"):
+            raise ContextoEmpresaFaltante(f"{nombre} no está aislado por empresa")
         return getattr(self._col, nombre)
 
 

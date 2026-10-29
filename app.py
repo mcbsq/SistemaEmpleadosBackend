@@ -25,15 +25,20 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# CORS — TODO (Fase D, ver docs/AEGIS...): restringir "origins" al dominio real
-# del frontend antes de producción. "*" combinado con rutas sin @jwt_required()
-# es la brecha más grande que tiene el proyecto hoy.
-CORS_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "*")
+# Orígenes explícitos (lista separada por comas) permiten cookies de sesión.
+# "*" no lleva credenciales: el navegador no acepta cookie con origen comodín.
+_cors_crudo = (os.environ.get("CORS_ALLOWED_ORIGINS") or "*").strip()
+if not _cors_crudo or _cors_crudo == "*":
+    CORS_ORIGINS = "*"
+    _cors_credenciales = False
+else:
+    CORS_ORIGINS = [origen.strip() for origen in _cors_crudo.split(",") if origen.strip()]
+    _cors_credenciales = True
 CORS(app,
      resources={r"/*": {"origins": CORS_ORIGINS}},
      methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-     allow_headers=["Content-Type", "Authorization"],
-     supports_credentials=False)
+     allow_headers=["Content-Type", "Authorization", "X-Universo", "X-CSRF-Token", "Idempotency-Key"],
+     supports_credentials=_cors_credenciales)
 
 
 @app.after_request
@@ -53,13 +58,24 @@ def no_cache(response):
     return response
 
 
+def _origen_cors():
+    if CORS_ORIGINS == "*":
+        return "*"
+    origen = request.headers.get("Origin")
+    if origen in CORS_ORIGINS:
+        return origen
+    return CORS_ORIGINS[0]
+
+
 @app.before_request
 def handle_preflight():
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
-        response.headers["Access-Control-Allow-Origin"] = CORS_ORIGINS
+        response.headers["Access-Control-Allow-Origin"] = _origen_cors()
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Universo"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Universo, X-CSRF-Token, Idempotency-Key"
+        if _cors_credenciales:
+            response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
 
 
@@ -76,29 +92,18 @@ def cargar_org_id():
     eso ya lo decide el @jwt_required() de la ruta específica.
     """
     g.org_id = None
-    pwd_temp = False
+    g.contexto_privado = False
+    g.modo_soporte = False
+    claims = None
     try:
         verify_jwt_in_request(optional=True)
-        claims = get_jwt()
-        if claims:
-            g.org_id = claims.get("org_id")
-            pwd_temp = bool(claims.get("pwd_temp"))
-            # Modo soporte: la cuenta suprema de la plataforma puede ver el
-            # universo de otra empresa mandando X-Universo. Solo lectura.
-            universo = (request.headers.get("X-Universo") or "").strip().lower()
-            if universo and universo != g.org_id:
-                from api.tenants.routes import es_operador_plataforma
-                if es_operador_plataforma(claims):
-                    g.org_id = universo
-                    g.modo_soporte = True
+        claims = get_jwt() or None
     except Exception:
-        pass
-    # Sesión con contraseña temporal: solo sirve para definir la nueva (ver
-    # api/login/logic.py). Recargar la página o llamar al API directo no
-    # permite saltarse el cambio.
-    if pwd_temp and request.endpoint not in ("change_password_route", "login_route", "health_check"):
-        return jsonify({"error": "Debes cambiar tu contraseña temporal antes de continuar.",
-                        "must_change_password": True}), 403
+        claims = None
+    from core.controles_request import aplicar
+    bloqueo = aplicar(mongo, claims)
+    if bloqueo:
+        return bloqueo
     if getattr(g, "modo_soporte", False) and request.method not in ("GET", "HEAD", "OPTIONS"):
         return jsonify({"error": "Estás viendo esta empresa en modo soporte (solo lectura). Sal del modo soporte para hacer cambios."}), 403
 
@@ -125,6 +130,12 @@ app.config['UPLOAD_FOLDER'] = os.environ.get(
 # tocar si algún día hay que ajustarlo).
 from datetime import timedelta
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=int(os.environ.get('JWT_ACCESS_MINUTES', 15)))
+app.config["JWT_TOKEN_LOCATION"] = ["headers", "cookies"]
+app.config["JWT_COOKIE_SECURE"] = False
+app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+app.config["JWT_COOKIE_HTTPONLY"] = True
+app.config["JWT_ACCESS_COOKIE_NAME"] = "access_token_cookie"
+app.config["JWT_COOKIE_SAMESITE"] = os.environ.get("COOKIE_SAMESITE", "Lax")
 
 jwt = JWTManager(app)
 
@@ -242,6 +253,7 @@ from api.bajas.routes                  import setup_bajas_routes
 from api.solicitudes_rh.routes         import setup_solicitudes_rh_routes
 from api.panel_rh.routes               import setup_panel_rh_routes
 from api.importacion.routes            import setup_importacion_routes
+from api.acceso                        import setup_acceso_routes
 
 setup_login_routes(app, mongo)
 setup_usuario_routes(app, mongo)
@@ -280,6 +292,7 @@ setup_bajas_routes(app, mongo)
 setup_solicitudes_rh_routes(app, mongo)
 setup_panel_rh_routes(app, mongo)
 setup_importacion_routes(app, mongo)
+setup_acceso_routes(app, mongo)
 
 
 @app.route('/health')

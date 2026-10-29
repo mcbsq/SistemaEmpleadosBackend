@@ -19,7 +19,7 @@ import logging
 
 from core.aegis_config import get_aegis_settings
 from core.aegis_client import (aegis_admin_create_user, aegis_admin_reset_password,
-                               aegis_admin_list_users, aegis_admin_set_active)
+                               aegis_admin_list_users, aegis_admin_retirar_acceso_producto)
 from core.mailer import build_tenant_login_url, send_temp_password_email
 from core.audit import registrar_auditoria
 
@@ -281,10 +281,6 @@ def update_usuario(mongo, id, user=None, password=None, role=None, areas_adminis
                     return jsonify({'error': 'La contraseña debe tener al menos 5 caracteres.'}), 400
                 update['password'] = generate_password_hash(password)
 
-        if temp_password:
-            # Al entrar con la temporal, el login obliga a cambiarla.
-            update['debe_cambiar_password'] = True
-
         if not update and not temp_password:
             return jsonify({'error': 'Nada que actualizar'}), 400
 
@@ -321,19 +317,18 @@ def delete_usuario(mongo, id):
         if not doc:
             return jsonify({'error': 'Usuario no encontrado'}), 404
 
-        # Primero desactivar la identidad en Aegis; si el IdP no responde, NO
-        # borramos en Mongo para no dejar una identidad huérfana que siga
-        # autenticando. Si Aegis ya no la tiene (404), seguimos con el borrado.
+        # Se retira solo el acceso a Empleados. La identidad global no se
+        # desactiva ni se borra: puede seguir en otros productos.
         s = get_aegis_settings()
         aegis_id = doc.get('aegis_user_id')
         if s["admin_enabled"] and aegis_id:
-            err = aegis_admin_set_active(str(aegis_id), False, tenant_id=g.org_id)
+            err = aegis_admin_retirar_acceso_producto(str(aegis_id), tenant_id=g.org_id)
             if err:
                 body, status = err
                 if status != 404:
-                    logging.warning("Aegis set_active=false falló para %s: %s %s", aegis_id, status, body)
+                    logging.warning("Aegis retirar acceso falló para %s: %s", aegis_id, status)
                     return jsonify({
-                        'error': 'No se pudo desactivar la cuenta en el sistema de identidad; intenta de nuevo.',
+                        'error': 'No se pudo retirar el acceso a Empleados; intenta de nuevo.',
                     }), 502
 
         mongo.db.usuario.delete_one({'_id': ObjectId(id)})

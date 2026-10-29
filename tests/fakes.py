@@ -4,6 +4,7 @@
 # (generación/validación/consumo de API keys) sin depender de una base de
 # datos real. Solo implementa lo que estos módulos realmente usan.
 import itertools
+import threading
 from bson.objectid import ObjectId
 
 
@@ -28,8 +29,17 @@ def _matches(doc, filtro):
                 elif op == "$exists":
                     if (k in doc) is not bool(opval):
                         return False
-                elif op in ("$gte", "$lte"):
-                    if actual is None or (actual < opval if op == "$gte" else actual > opval):
+                elif op == "$lt":
+                    if actual is None or actual >= opval:
+                        return False
+                elif op == "$lte":
+                    if actual is None or actual > opval:
+                        return False
+                elif op == "$gt":
+                    if actual is None or actual <= opval:
+                        return False
+                elif op == "$gte":
+                    if actual is None or actual < opval:
                         return False
                 else:
                     raise NotImplementedError(f"FakeCollection no soporta el operador {op}")
@@ -51,6 +61,7 @@ class FakeCollection:
     def __init__(self):
         self._docs = {}
         self._counter = itertools.count(1)
+        self._lock = threading.RLock()
 
     def insert_one(self, doc):
         doc = dict(doc)
@@ -98,6 +109,30 @@ class FakeCollection:
                 "upserted_id": result.inserted_id,
             })()
         return type("Result", (), {"matched_count": 0, "modified_count": 0})()
+
+    def find_one_and_update(self, filtro, update, upsert=False):
+        """Devuelve el documento anterior. Con upsert, None significa que se insertó."""
+        with self._lock:
+            for doc in self._docs.values():
+                if _matches(doc, filtro):
+                    antes = dict(doc)
+                    if "$set" in update:
+                        doc.update(update["$set"])
+                    if "$inc" in update:
+                        for k, v in update["$inc"].items():
+                            doc[k] = doc.get(k, 0) + v
+                    return antes
+            if not upsert:
+                return None
+            nuevo = {}
+            for k, v in (filtro or {}).items():
+                if str(k).startswith("$") or isinstance(v, dict):
+                    continue
+                nuevo[k] = v
+            nuevo.update(update.get("$setOnInsert") or {})
+            nuevo.update(update.get("$set") or {})
+            self.insert_one(nuevo)
+            return None
 
     def replace_one(self, filtro, replacement, upsert=False):
         for _id, doc in self._docs.items():
