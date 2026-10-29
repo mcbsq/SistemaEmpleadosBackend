@@ -17,7 +17,7 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt
 
 from core.audit import registrar_auditoria
-from core.visibilidad_perfil import acceso_perfil, _str_id, ROLES_RH
+from core.visibilidad_perfil import acceso_perfil, _str_id, ROLES_RH, tarjeta_directorio
 
 # Foto de perfil: el frontend la recorta y comprime (512 px, JPEG/WebP) antes
 # de mandarla; este límite solo frena que alguien suba un archivo enorme
@@ -52,30 +52,117 @@ def setup_perfil_routes(app, mongo):
 
         rh = mongo.db.rh.find_one({'empleado_id': eid}, {
             'Puesto': 1, 'Departamento': 1, 'JefeInmediato': 1, 'JefeInmediato_id': 1,
+            'Extension': 1, 'TelefonoOficina': 1, 'UbicacionOficina': 1,
         }) or {}
         cuenta = mongo.db.usuario.find_one({'empleado_id': {'$in': [eid, str(eid)]}}, {'email': 1}) or {}
+        contacto = mongo.db.datoscontacto.find_one({'EmpleadoId': eid}, {'TelCelular': 1, 'ListaCorreos': 1}) or {}
 
-        return jsonify({
-            '_id':              str(eid),
-            'Nombre':           emp.get('Nombre', ''),
-            'ApelPaterno':      emp.get('ApelPaterno', ''),
-            'ApelMaterno':      emp.get('ApelMaterno', ''),
-            'Fotografias':      [f for f in [_foto(emp)] if f],
-            'Puesto':           rh.get('Puesto', ''),
-            # El área vive en dos lugares por historia (ficha laboral y
-            # empleados.depto_id); si la ficha no la tiene, se usa la otra.
-            'Departamento':     rh.get('Departamento') or (emp.get('depto_id') if str(emp.get('depto_id') or '').strip().lower() != 'sin asignar' else '') or '',
-            'JefeInmediato':    rh.get('JefeInmediato', ''),
-            'JefeInmediato_id': _str_id(rh.get('JefeInmediato_id')),
-            # El correo de la cuenta de acceso es el de trabajo; los correos
-            # de "Datos de contacto" son personales y no salen aquí.
-            'CorreoLaboral':    cuenta.get('email') or '',
-            # Personalización del propio empleado (Ajustes de perfil).
-            'NombrePreferido':  emp.get('NombrePreferido', ''),
-            'Titular':          emp.get('Titular', ''),
-            'estado':           emp.get('estado', 'activo'),
+        # Qué ve de esta persona quien pregunta lo decide su rol (permisos de
+        # Directorio en Gestión de roles) — ver core/visibilidad_perfil.py.
+        tarjeta = tarjeta_directorio(mongo, get_jwt(), emp, rh, cuenta, contacto)
+        tarjeta.update({
+            # El estado de empleo (activo/baja) lo usa la página de perfil;
+            # "estado" de disponibilidad puede venir de la tarjeta.
+            'estado':           tarjeta.get('estado') or emp.get('estado', 'activo'),
             # Los datos de la salida (motivo incluido) solo los ve RH.
             'baja':             emp.get('baja') if emp.get('estado') == 'baja' and get_jwt().get('role') in ROLES_RH else None,
+        })
+        return jsonify(tarjeta), 200
+
+    # Directorio de la empresa: una tarjeta por persona activa, con lo que
+    # el rol de quien consulta tiene permitido ver.
+    @app.route('/directorio', methods=['GET'])
+    @jwt_required()
+    def directorio_route():
+        identity = get_jwt()
+        empleados = list(mongo.db.empleados.find({'estado': {'$ne': 'baja'}}, {
+            'Nombre': 1, 'ApelPaterno': 1, 'ApelMaterno': 1, 'NombrePreferido': 1, 'Titular': 1,
+            'Fotografias': {'$slice': 1}, 'Fotografia': 1, 'FecNacimiento': 1, 'estado': 1, 'depto_id': 1,
+        }))
+        ids = [e['_id'] for e in empleados]
+        rhs = {str(r.get('empleado_id')): r for r in mongo.db.rh.find({'empleado_id': {'$in': ids}}, {
+            'empleado_id': 1, 'Puesto': 1, 'Departamento': 1, 'JefeInmediato': 1, 'JefeInmediato_id': 1,
+            'Extension': 1, 'TelefonoOficina': 1, 'UbicacionOficina': 1,
+        })}
+        cuentas = {str(c.get('empleado_id')): c for c in mongo.db.usuario.find(
+            {'empleado_id': {'$in': ids + [str(i) for i in ids]}}, {'empleado_id': 1, 'email': 1})}
+        contactos = {str(c.get('EmpleadoId')): c for c in mongo.db.datoscontacto.find(
+            {'EmpleadoId': {'$in': ids}}, {'EmpleadoId': 1, 'TelCelular': 1, 'ListaCorreos': 1})}
+        q = (request.args.get('q') or '').strip().lower()
+        tarjetas = []
+        for e in empleados:
+            k = str(e['_id'])
+            t = tarjeta_directorio(mongo, identity, e, rhs.get(k), cuentas.get(k), contactos.get(k))
+            texto = ' '.join(str(t.get(c, '')) for c in ('Nombre', 'ApelPaterno', 'NombrePreferido', 'Puesto', 'Departamento', 'Extension')).lower()
+            if not q or q in texto:
+                tarjetas.append(t)
+        tarjetas.sort(key=lambda t: (t.get('Nombre', '') + ' ' + t.get('ApelPaterno', '')).lower())
+        return jsonify(tarjetas), 200
+
+    # Mini organigrama del perfil: la persona, su cadena de mando (hasta
+    # `niveles` jefes hacia arriba) y quiénes le reportan directamente.
+    @app.route('/perfil/<empleado_id>/cadena-mando', methods=['GET'])
+    @jwt_required()
+    def cadena_mando_route(empleado_id):
+        try:
+            eid = ObjectId(empleado_id)
+        except (InvalidId, TypeError):
+            return jsonify({'error': 'ID inválido'}), 400
+        niveles = max(1, min(int(request.args.get('niveles', 3) or 3), 6))
+
+        def nodo(oid):
+            emp = mongo.db.empleados.find_one({'_id': oid}, {
+                'Nombre': 1, 'ApelPaterno': 1, 'NombrePreferido': 1, 'Fotografias': {'$slice': 1}, 'Fotografia': 1, 'estado': 1})
+            if not emp:
+                return None, {}
+            rh = mongo.db.rh.find_one({'empleado_id': oid}, {'Puesto': 1, 'Departamento': 1, 'JefeInmediato_id': 1, 'JefeInmediato': 1}) or {}
+            fotos = emp.get('Fotografias') or []
+            return {
+                '_id':          str(oid),
+                'Nombre':       emp.get('NombrePreferido') or emp.get('Nombre', ''),
+                'ApelPaterno':  emp.get('ApelPaterno', ''),
+                'Foto':         fotos[0] if fotos else emp.get('Fotografia'),
+                'Puesto':       rh.get('Puesto', ''),
+                'Departamento': rh.get('Departamento', ''),
+                'baja':         emp.get('estado') == 'baja',
+            }, rh
+
+        actual, rh = nodo(eid)
+        if not actual:
+            return jsonify({'error': 'Empleado no encontrado'}), 404
+
+        superiores, vistos = [], {str(eid)}
+        jefe_id, jefe_nombre = _str_id(rh.get('JefeInmediato_id')), rh.get('JefeInmediato', '')
+        while len(superiores) < niveles and (jefe_id or jefe_nombre):
+            if not jefe_id or jefe_id in vistos:
+                # Jefe capturado solo con nombre (sin ficha enlazada) o ciclo.
+                if jefe_nombre and jefe_id not in vistos:
+                    superiores.append({'_id': None, 'Nombre': jefe_nombre, 'ApelPaterno': '', 'Puesto': '', 'Departamento': ''})
+                break
+            try:
+                n, rh_j = nodo(ObjectId(jefe_id))
+            except (InvalidId, TypeError):
+                n, rh_j = None, {}
+            if not n:
+                break
+            vistos.add(jefe_id)
+            superiores.append(n)
+            jefe_id, jefe_nombre = _str_id(rh_j.get('JefeInmediato_id')), rh_j.get('JefeInmediato', '')
+        hay_mas = bool(jefe_id and jefe_id not in vistos) if len(superiores) == niveles else False
+
+        directos = []
+        for r in mongo.db.rh.find({'JefeInmediato_id': {'$in': [str(eid), eid]}}, {'empleado_id': 1}):
+            n, _ = nodo(r.get('empleado_id'))
+            if n and not n['baja']:
+                directos.append(n)
+        directos.sort(key=lambda n: (n['Nombre'] + ' ' + n['ApelPaterno']).lower())
+
+        # De arriba (el jefe más alto) hacia la persona.
+        return jsonify({
+            'superiores': list(reversed(superiores)),
+            'actual':     actual,
+            'directos':   directos,
+            'hay_mas_arriba': hay_mas,
         }), 200
 
     # Ajustes de perfil (estilo red social): lo que el propio empleado decide

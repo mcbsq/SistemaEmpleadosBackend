@@ -281,6 +281,10 @@ def update_usuario(mongo, id, user=None, password=None, role=None, areas_adminis
                     return jsonify({'error': 'La contraseña debe tener al menos 5 caracteres.'}), 400
                 update['password'] = generate_password_hash(password)
 
+        if temp_password:
+            # Al entrar con la temporal, el login obliga a cambiarla.
+            update['debe_cambiar_password'] = True
+
         if not update and not temp_password:
             return jsonify({'error': 'Nada que actualizar'}), 400
 

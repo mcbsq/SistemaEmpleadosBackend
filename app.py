@@ -76,11 +76,13 @@ def cargar_org_id():
     eso ya lo decide el @jwt_required() de la ruta específica.
     """
     g.org_id = None
+    pwd_temp = False
     try:
         verify_jwt_in_request(optional=True)
         claims = get_jwt()
         if claims:
             g.org_id = claims.get("org_id")
+            pwd_temp = bool(claims.get("pwd_temp"))
             # Modo soporte: la cuenta suprema de la plataforma puede ver el
             # universo de otra empresa mandando X-Universo. Solo lectura.
             universo = (request.headers.get("X-Universo") or "").strip().lower()
@@ -91,6 +93,12 @@ def cargar_org_id():
                     g.modo_soporte = True
     except Exception:
         pass
+    # Sesión con contraseña temporal: solo sirve para definir la nueva (ver
+    # api/login/logic.py). Recargar la página o llamar al API directo no
+    # permite saltarse el cambio.
+    if pwd_temp and request.endpoint not in ("change_password_route", "login_route", "health_check"):
+        return jsonify({"error": "Debes cambiar tu contraseña temporal antes de continuar.",
+                        "must_change_password": True}), 403
     if getattr(g, "modo_soporte", False) and request.method not in ("GET", "HEAD", "OPTIONS"):
         return jsonify({"error": "Estás viendo esta empresa en modo soporte (solo lectura). Sal del modo soporte para hacer cambios."}), 403
 
@@ -121,7 +129,9 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=int(os.environ.get('J
 jwt = JWTManager(app)
 
 try:
-    MONGO_URI = os.environ['MONGO_URI']
+    # MONGO_URI_OVERRIDE: el stack de Docker lo usa para apuntar al Mongo
+    # local (modo "local" de empleados.sh) sin tocar el MONGO_URI de Atlas.
+    MONGO_URI = os.environ.get('MONGO_URI_OVERRIDE') or os.environ['MONGO_URI']
 except KeyError:
     logger.error("Falta MONGO_URI en el entorno. No hay valor por defecto por seguridad "
                  "(el anterior tenía la contraseña real de Atlas hardcodeada).")
@@ -136,7 +146,7 @@ class MongoWrapper:
 
 try:
     logger.debug("Conectando a MongoDB Atlas...")
-    mongo = MongoWrapper(MONGO_URI, "controlempleados")
+    mongo = MongoWrapper(MONGO_URI, os.environ.get("MONGO_DB_NAME") or "controlempleados")
     mongo.db.command('ping')
     logger.info("--- CONEXIÓN EXITOSA A MONGODB ATLAS ---")
 except Exception as e:

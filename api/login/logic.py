@@ -114,18 +114,23 @@ def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_pa
 
     user = usuario.get("user") or login_label
     role = usuario.get("role", "EMPLOYEE")
+    # Contraseña temporal (alta, restablecida por el admin o por "Olvidé mi
+    # contraseña"): la bandera persiste en Mongo hasta que se cambie, así no
+    # se pierde aunque Aegis no la reporte o la sesión se renueve.
+    if must_change_password and not usuario.get("debe_cambiar_password") and usuario.get("_id"):
+        mongo.db.raw.usuario.update_one({"_id": usuario["_id"]}, {"$set": {"debe_cambiar_password": True}})
+    must_change_password = bool(must_change_password or usuario.get("debe_cambiar_password"))
     empleado_id = str(usuario.get("empleado_id") or "")
     org_id = org_id or usuario.get("org_id") or "cibercom"
 
-    # Roles de sistema: tabla fija. Roles personalizados (creados en Gestión
-    # de roles): se resuelven en vivo contra roles_custom, para que el login
-    # de un rol inventado por el cliente refleje sus permisos reales.
-    if role in PERMISOS_DEFAULT:
-        permisos = usuario.get("permisos") or PERMISOS_DEFAULT[role]
-        modulos = usuario.get("modulos") or DASHBOARD_MODULOS.get(role, DASHBOARD_MODULOS["EMPLOYEE"])
-    else:
-        permisos = usuario.get("permisos") or get_permisos_for_role(mongo, role) or PERMISOS_DEFAULT["EMPLOYEE"]
-        modulos = usuario.get("modulos") or DASHBOARD_MODULOS["EMPLOYEE"]
+    # Todos los roles se resuelven en vivo contra roles_custom: así los
+    # permisos que la empresa editó a un rol de sistema (o un rol recreado
+    # "de cero") se reflejan en el siguiente login, no solo en el navegador
+    # del administrador que los cambió.
+    permisos = usuario.get("permisos") or get_permisos_for_role(mongo, role)
+    if not permisos and role not in PERMISOS_DEFAULT:
+        permisos = PERMISOS_DEFAULT["EMPLOYEE"]
+    modulos = usuario.get("modulos") or DASHBOARD_MODULOS.get(role, DASHBOARD_MODULOS["EMPLOYEE"])
 
     # Solo tiene efecto real para ADMIN; SUPER_ADMIN ve todo y EMPLOYEE usa
     # su propia área (resuelta en empleados/logic.py vía su empleado_id).
@@ -140,6 +145,9 @@ def _issue_token_response(mongo, usuario: dict, login_label: str, must_change_pa
         "empleado_id":         empleado_id,
         "org_id":              org_id,
         "areas_administradas": areas_administradas,
+        # Con contraseña temporal el token SOLO sirve para cambiarla (ver
+        # app.py::cargar_org_id); al cambiarla se emite uno normal.
+        "pwd_temp":            must_change_password,
     }
     access_token = create_access_token(
         identity=user, additional_claims=claims,
@@ -321,6 +329,24 @@ def login(mongo, identifier, password, requested_org_id=None):
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
+def _tras_cambio(mongo, usuario, jwt_claims):
+    """
+    La contraseña nueva ya quedó guardada (Aegis o Mongo): se quita la
+    bandera de temporal. Si la sesión era de contraseña temporal, se emite
+    un token normal para que la persona entre al sistema sin volver a
+    iniciar sesión.
+    """
+    if usuario.get("debe_cambiar_password"):
+        mongo.db.raw.usuario.update_one({"_id": usuario["_id"]}, {"$unset": {"debe_cambiar_password": ""}})
+        usuario = {**usuario, "debe_cambiar_password": False}
+    if not jwt_claims.get("pwd_temp"):
+        return jsonify({"message": "Contraseña actualizada"}), 200
+    resp, status = _issue_token_response(mongo, usuario, jwt_claims.get("user"), org_id=jwt_claims.get("org_id"))
+    data = resp.get_json() or {}
+    data["message"] = "Contraseña actualizada"
+    return jsonify(data), status
+
+
 def change_password(mongo, jwt_claims, current_password, new_password):
     """
     Cambio de contraseña del propio usuario autenticado (POST /change-password).
@@ -359,7 +385,7 @@ def change_password(mongo, jwt_claims, current_password, new_password):
                 if isinstance(body, dict) and body.get("detail"):
                     return jsonify({"error": body["detail"]}), status
                 return jsonify({"error": "No se pudo cambiar la contraseña"}), 502
-            return jsonify({"message": "Contraseña actualizada"}), 200
+            return _tras_cambio(mongo, usuario, jwt_claims)
 
         # Modo legacy: hash en Mongo.
         stored = usuario.get("password")
@@ -372,7 +398,7 @@ def change_password(mongo, jwt_claims, current_password, new_password):
             {"_id": usuario["_id"]},
             {"$set": {"password": generate_password_hash(new_password)}},
         )
-        return jsonify({"message": "Contraseña actualizada"}), 200
+        return _tras_cambio(mongo, usuario, jwt_claims)
 
     except Exception as e:
         logger.error("Error en change_password: %s", e)

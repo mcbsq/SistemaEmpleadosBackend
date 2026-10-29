@@ -28,6 +28,9 @@ def _matches(doc, filtro):
                 elif op == "$exists":
                     if (k in doc) is not bool(opval):
                         return False
+                elif op in ("$gte", "$lte"):
+                    if actual is None or (actual < opval if op == "$gte" else actual > opval):
+                        return False
                 else:
                     raise NotImplementedError(f"FakeCollection no soporta el operador {op}")
         elif actual != v:
@@ -72,6 +75,10 @@ class FakeCollection:
                 if "$inc" in update:
                     for k, v in update["$inc"].items():
                         doc[k] = doc.get(k, 0) + v
+                for k in update.get("$unset", {}):
+                    doc.pop(k, None)
+                for k, v in update.get("$pull", {}).items():
+                    doc[k] = [x for x in doc.get(k, []) if x != v]
                 if "$push" in update:
                     for k, v in update["$push"].items():
                         doc[k] = list(doc.get(k, [])) + [v]
