@@ -121,12 +121,24 @@ def relaciones(mongo, identity, empleado_id):
     return rels
 
 
+def permisos_de(mongo, identity):
+    from core.permissions import get_permisos_for_role
+    role = identity.get("role") if isinstance(identity, dict) else None
+    return set(get_permisos_for_role(mongo, role))
+
+
 def acceso_perfil(mongo, identity, empleado_id):
     rels = relaciones(mongo, identity, empleado_id)
     ver, editar = set(), set()
     for r in rels:
         ver |= _MATRIZ[r]["ver"]
         editar |= _MATRIZ[r]["editar"]
+    # Un compañero sin otra relación ve lo profesional solo si su rol tiene
+    # ese permiso de directorio (Gestión de roles → Directorio).
+    if rels == {"companero"}:
+        permisos = permisos_de(mongo, identity)
+        if "*" not in permisos and "dir_profesional" not in permisos:
+            ver.discard("profesional")
     return {
         "relaciones": sorted(rels),
         "ver":        {s: s in ver for s in SECCIONES},
@@ -180,3 +192,82 @@ def filtrar_rh(mongo, identity, empleado_id, doc):
             if doc.get(campo):
                 doc[campo] = _enmascarar(doc[campo])
     return doc
+
+
+# ─── Directorio: lo que se ve de un compañero ────────────────────────────────
+# Un empleado general necesita saber CÓMO contactar a alguien y SI ESTÁ
+# disponible, no su vida personal. Cada bloque depende de un permiso del rol
+# de quien mira (core/permissions.py::PERMISOS_DIRECTORIO); RH, el propio
+# empleado y su jefe directo siempre lo ven completo.
+def estado_actual(mongo, empleado_id, emp=None):
+    """
+    "baja" | "vacaciones" | "activo". Vacaciones = una solicitud aprobada que
+    cubre el día de hoy (fechas YYYY-MM-DD); se devuelve también el regreso.
+    """
+    from datetime import date
+    emp = emp or {}
+    if emp.get("estado") == "baja":
+        return {"estado": "baja"}
+    hoy = date.today().isoformat()
+    try:
+        sol = mongo.db.vacaciones_solicitudes.find_one({
+            "empleado_id": ObjectId(str(empleado_id)), "estado": "aprobada",
+            "fecha_inicio": {"$lte": hoy}, "fecha_fin": {"$gte": hoy},
+        })
+    except Exception:
+        sol = None
+    if sol:
+        return {"estado": "vacaciones", "hasta": sol.get("fecha_fin")}
+    return {"estado": "activo"}
+
+
+def tarjeta_directorio(mongo, identity, emp, rh=None, cuenta=None, contacto=None):
+    """Tarjeta de un empleado, recortada según los permisos de quien mira."""
+    rh, cuenta, contacto = rh or {}, cuenta or {}, contacto or {}
+    eid = str(emp.get("_id"))
+    rels = relaciones(mongo, identity, eid)
+    permisos = permisos_de(mongo, identity)
+    completo = "*" in permisos or bool(rels & {"rh", "propio", "jefe"})
+    puede_ver = lambda p: completo or p in permisos  # noqa: E731
+
+    fotos = emp.get("Fotografias") or []
+    tarjeta = {
+        "_id":             eid,
+        "Nombre":          emp.get("Nombre", ""),
+        "ApelPaterno":     emp.get("ApelPaterno", ""),
+        "ApelMaterno":     emp.get("ApelMaterno", ""),
+        "NombrePreferido": emp.get("NombrePreferido", ""),
+        "Titular":         emp.get("Titular", ""),
+        "Fotografias":     fotos[:1] if fotos else ([emp["Fotografia"]] if emp.get("Fotografia") else []),
+        "visible":         sorted(p for p in ("dir_contacto", "dir_estado", "dir_puesto", "dir_profesional",
+                                              "dir_cumpleanos", "dir_contacto_personal") if puede_ver(p)),
+    }
+    if puede_ver("dir_puesto"):
+        depto = rh.get("Departamento") or emp.get("depto_id") or ""
+        tarjeta.update({
+            "Puesto":           rh.get("Puesto", ""),
+            "Departamento":     "" if str(depto).strip().lower() == "sin asignar" else depto,
+            "JefeInmediato":    rh.get("JefeInmediato", ""),
+            "JefeInmediato_id": _str_id(rh.get("JefeInmediato_id")),
+        })
+    if puede_ver("dir_contacto"):
+        tarjeta.update({
+            # El correo de la cuenta de acceso es el de trabajo.
+            "CorreoLaboral":    cuenta.get("email") or "",
+            "TelefonoOficina":  rh.get("TelefonoOficina", ""),
+            "Extension":        rh.get("Extension", ""),
+            "UbicacionOficina": rh.get("UbicacionOficina", ""),
+        })
+    if puede_ver("dir_estado"):
+        tarjeta.update(estado_actual(mongo, eid, emp))
+    if puede_ver("dir_cumpleanos"):
+        nac = str(emp.get("FecNacimiento") or "")[:10]
+        tarjeta["Cumpleanos"] = nac[5:10] if len(nac) == 10 else ""  # MM-DD, nunca el año
+    if puede_ver("dir_contacto_personal"):
+        correos = contacto.get("ListaCorreos") or []
+        principal = next((c for c in correos if isinstance(c, dict) and c.get("principal")), None) or (correos[0] if correos else None)
+        tarjeta.update({
+            "TelCelular":     contacto.get("TelCelular", ""),
+            "CorreoPersonal": (principal.get("email") if isinstance(principal, dict) else principal) or "",
+        })
+    return tarjeta

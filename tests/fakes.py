@@ -86,6 +86,10 @@ class FakeCollection:
                 if "$inc" in update:
                     for k, v in update["$inc"].items():
                         doc[k] = doc.get(k, 0) + v
+                for k in update.get("$unset", {}):
+                    doc.pop(k, None)
+                for k, v in update.get("$pull", {}).items():
+                    doc[k] = [x for x in doc.get(k, []) if x != v]
                 if "$push" in update:
                     for k, v in update["$push"].items():
                         doc[k] = list(doc.get(k, [])) + [v]

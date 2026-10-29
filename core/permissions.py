@@ -16,26 +16,44 @@ from flask_jwt_extended import jwt_required, get_jwt
 
 from api.auth_decorators import rol_de_identidad
 
+# Qué ve un rol de los COMPAÑEROS (perfil público y directorio). Un empleado
+# general ve cómo contactar a alguien y si está disponible — no su vida
+# personal. Ver core/visibilidad_perfil.py::tarjeta_directorio.
+PERMISOS_DIRECTORIO = [
+    "dir_contacto",      # correo laboral, teléfono de oficina, extensión
+    "dir_estado",        # activo, de vacaciones (y hasta cuándo), baja
+    "dir_puesto",        # puesto, área y jefe inmediato
+    "dir_profesional",   # descripción, educación, experiencia, habilidades
+    "dir_cumpleanos",    # día y mes de cumpleaños (nunca el año)
+]
+# Celular y correo personal: solo si la empresa lo decide para un rol.
+PERMISO_CONTACTO_PERSONAL = "dir_contacto_personal"
+
 # Permisos por rol de sistema (espejo de RoleManager.jsx / authService.js).
 PERMISOS_DEFAULT = {
     "SUPER_ADMIN":     ["*"],
     "ADMIN":           ["ver_empleados", "crud_empleados", "ver_expediente", "ver_rh",
                         "ver_proyectos", "ver_organigrama", "ver_habilidades",
                         "ver_dashboard", "ver_carrusel", "gestionar_roles",
-                        "monitor_incidencias", "ver_perfil_equipo"],
-    "EMPLOYEE":        ["ver_organigrama", "ver_carrusel", "ver_perfil_propio"],
+                        "monitor_incidencias", "ver_perfil_equipo",
+                        *PERMISOS_DIRECTORIO, PERMISO_CONTACTO_PERSONAL],
+    "EMPLOYEE":        ["ver_organigrama", "ver_carrusel", "ver_perfil_propio",
+                        *PERMISOS_DIRECTORIO],
     "JEFE_AREA":       ["ver_empleados", "ver_organigrama", "ver_proyectos",
                         "ver_habilidades", "solo_equipo_directo", "ver_carrusel",
-                        "ver_dashboard"],
-    "CONTADOR":        ["ver_empleados", "ver_rh", "ver_organigrama", "ver_dashboard", "ver_carrusel"],
+                        "ver_dashboard", *PERMISOS_DIRECTORIO],
+    "CONTADOR":        ["ver_empleados", "ver_rh", "ver_organigrama", "ver_dashboard", "ver_carrusel",
+                        *PERMISOS_DIRECTORIO],
     "PROJECT_MANAGER": ["ver_empleados", "ver_proyectos", "ver_habilidades",
-                        "ver_organigrama", "ver_dashboard", "ver_carrusel"],
+                        "ver_organigrama", "ver_dashboard", "ver_carrusel",
+                        *PERMISOS_DIRECTORIO],
     "MEDICO":          ["ver_empleados", "ver_expediente", "ver_organigrama",
-                        "ver_dashboard", "ver_carrusel"],
+                        "ver_dashboard", "ver_carrusel", *PERMISOS_DIRECTORIO],
     # Recursos Humanos: todo lo de personas, nada de sistema.
     "RH":              ["ver_empleados", "crud_empleados", "ver_expediente", "ver_rh",
                         "ver_proyectos", "ver_organigrama", "ver_habilidades",
-                        "ver_dashboard", "ver_carrusel", "ver_perfil_equipo"],
+                        "ver_dashboard", "ver_carrusel", "ver_perfil_equipo",
+                        *PERMISOS_DIRECTORIO, PERMISO_CONTACTO_PERSONAL],
 }
 
 DASHBOARD_MODULOS = {
@@ -52,26 +70,57 @@ DASHBOARD_MODULOS = {
 _ROLES_SISTEMA = set(PERMISOS_DEFAULT.keys())
 
 
+def config_roles(mongo):
+    """
+    Documento de roles de la empresa (colección `roles_custom`, uno por
+    tenant): roles creados desde Gestión de roles, roles de sistema que la
+    empresa eliminó y permisos editados de los roles de sistema.
+    """
+    try:
+        doc = mongo.db.roles_custom.find_one({"tipo": "custom"}) or {}
+    except Exception:
+        doc = {}
+    return {
+        "custom":             [r for r in (doc.get("roles") or []) if isinstance(r, dict)],
+        "sistema_eliminados": list(doc.get("sistema_eliminados") or []),
+        "permisos_sistema":   dict(doc.get("permisos_sistema") or {}),
+    }
+
+
+def rol_existe(mongo, role):
+    """Un rol se puede asignar si es de sistema (no eliminado) o personalizado."""
+    if role == "SUPER_ADMIN":
+        return True
+    cfg = config_roles(mongo)
+    if any(r.get("nombre") == role for r in cfg["custom"]):
+        return True
+    return role in PERMISOS_DEFAULT and role not in cfg["sistema_eliminados"]
+
+
 def get_permisos_for_role(mongo, role):
     """
     Resuelve los permisos de CUALQUIER rol — de sistema o personalizado.
-    SUPER_ADMIN siempre tiene "*" (todo). Los roles personalizados se leen de
-    `roles_custom` (el mismo documento que edita RoleManager.jsx); si el rol
-    no existe en ningún lado, se le niega todo (lista vacía) por seguridad.
+    SUPER_ADMIN siempre tiene "*" (todo). Orden:
+      1. rol personalizado con ese nombre (incluye uno recreado "de cero" con
+         el nombre de un rol de sistema que la empresa eliminó),
+      2. rol de sistema con los permisos que la empresa le editó,
+      3. permisos de fábrica del rol de sistema.
+    Un rol que no existe en ningún lado (o de sistema eliminado) no tiene
+    permisos, por seguridad.
     """
     if not role:
         return []
+    if role == "SUPER_ADMIN":
+        return ["*"]
+    cfg = config_roles(mongo)
+    for r in cfg["custom"]:
+        if r.get("nombre") == role:
+            return list(r.get("permisos") or [])
     if role in PERMISOS_DEFAULT:
-        return PERMISOS_DEFAULT[role]
-
-    try:
-        doc = mongo.db.roles_custom.find_one({"tipo": "custom"})
-        roles = doc.get("roles", []) if doc else []
-        for r in roles:
-            if r.get("nombre") == role:
-                return r.get("permisos", [])
-    except Exception:
-        pass
+        if role in cfg["sistema_eliminados"]:
+            return []
+        editados = cfg["permisos_sistema"].get(role)
+        return list(editados) if isinstance(editados, list) else list(PERMISOS_DEFAULT[role])
     return []
 
 

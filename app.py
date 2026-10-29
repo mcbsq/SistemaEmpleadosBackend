@@ -140,7 +140,9 @@ app.config["JWT_COOKIE_SAMESITE"] = os.environ.get("COOKIE_SAMESITE", "Lax")
 jwt = JWTManager(app)
 
 try:
-    MONGO_URI = os.environ['MONGO_URI']
+    # MONGO_URI_OVERRIDE: el stack de Docker lo usa para apuntar al Mongo
+    # local (modo "local" de empleados.sh) sin tocar el MONGO_URI de Atlas.
+    MONGO_URI = os.environ.get('MONGO_URI_OVERRIDE') or os.environ['MONGO_URI']
 except KeyError:
     logger.error("Falta MONGO_URI en el entorno. No hay valor por defecto por seguridad "
                  "(el anterior tenía la contraseña real de Atlas hardcodeada).")
@@ -155,7 +157,7 @@ class MongoWrapper:
 
 try:
     logger.debug("Conectando a MongoDB Atlas...")
-    mongo = MongoWrapper(MONGO_URI, "controlempleados")
+    mongo = MongoWrapper(MONGO_URI, os.environ.get("MONGO_DB_NAME") or "controlempleados")
     mongo.db.command('ping')
     logger.info("--- CONEXIÓN EXITOSA A MONGODB ATLAS ---")
 except Exception as e:

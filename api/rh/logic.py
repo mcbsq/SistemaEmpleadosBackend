@@ -4,6 +4,7 @@ from bson import json_util
 from bson.objectid import ObjectId
 from bson.errors import InvalidId
 import json
+import re
 import logging
 
 from core.audit import registrar_auditoria, diff_documentos
@@ -99,6 +100,7 @@ def _filtrar_payload_por_presentes(payload, data):
         'TipoRelacionLaboral', 'NSS', 'SalarioDiario', 'SalarioDiarioIntegrado',
         'Banco', 'CLABE', 'CuentaBancaria',
         'SDI_manual', 'SDI_motivo', 'SDI_factor', 'PeriodicidadPago',
+        'Extension', 'TelefonoOficina', 'UbicacionOficina',
     )
     out = {'empleado_id': payload['empleado_id']}
     for campo in SIMPLES:
@@ -346,4 +348,8 @@ def _build_payload(eid, data):
         # nómina (lo sube RH); "prestador_servicios" (honorarios) -> el propio
         # empleado sube su CFDI/factura para que le paguen.
         'TipoRelacionLaboral':  data.get('TipoRelacionLaboral', 'nomina'),
+        # Contacto laboral (lo ven los compañeros en el directorio).
+        'Extension':            re.sub(r'\D', '', str(data.get('Extension', '') or ''))[:8],
+        'TelefonoOficina':      re.sub(r'[^\d+ ()-]', '', str(data.get('TelefonoOficina', '') or '')).strip()[:20],
+        'UbicacionOficina':     str(data.get('UbicacionOficina', '') or '').strip()[:80],
     }

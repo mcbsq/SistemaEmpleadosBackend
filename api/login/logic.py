@@ -125,15 +125,13 @@ def _issue_token_response(
     empleado_id = str(usuario.get("empleado_id") or "")
     org_id = org_id or usuario.get("org_id") or "cibercom"
 
-    # Roles de sistema: tabla fija. Roles personalizados (creados en Gestión
-    # de roles): se resuelven en vivo contra roles_custom, para que el login
-    # de un rol inventado por el cliente refleje sus permisos reales.
-    if role in PERMISOS_DEFAULT:
-        permisos = usuario.get("permisos") or PERMISOS_DEFAULT[role]
-        modulos = usuario.get("modulos") or DASHBOARD_MODULOS.get(role, DASHBOARD_MODULOS["EMPLOYEE"])
-    else:
-        permisos = usuario.get("permisos") or get_permisos_for_role(mongo, role) or PERMISOS_DEFAULT["EMPLOYEE"]
-        modulos = usuario.get("modulos") or DASHBOARD_MODULOS["EMPLOYEE"]
+    # Todos los roles se resuelven en vivo contra roles_custom: así los
+    # permisos que la empresa editó a un rol de sistema (o un rol recreado
+    # "de cero") se reflejan en el siguiente login.
+    permisos = usuario.get("permisos") or get_permisos_for_role(mongo, role)
+    if not permisos and role not in PERMISOS_DEFAULT:
+        permisos = PERMISOS_DEFAULT["EMPLOYEE"]
+    modulos = usuario.get("modulos") or DASHBOARD_MODULOS.get(role, DASHBOARD_MODULOS["EMPLOYEE"])
 
     # Solo tiene efecto real para ADMIN; SUPER_ADMIN ve todo y EMPLOYEE usa
     # su propia área (resuelta en empleados/logic.py vía su empleado_id).
@@ -165,7 +163,7 @@ def _issue_token_response(
         if sesion.get("rol_efectivo"):
             role = sesion["rol_efectivo"]
             if role in PERMISOS_DEFAULT:
-                permisos = PERMISOS_DEFAULT[role]
+                permisos = get_permisos_for_role(mongo, role)
                 modulos = DASHBOARD_MODULOS.get(role, DASHBOARD_MODULOS["EMPLOYEE"])
             plataforma = bool(sesion.get("claims", {}).get("plataforma")) and role == "SUPER_ADMIN"
             claims["role"] = role

@@ -6,6 +6,7 @@ from .logic import (create_usuario, get_usuarios, get_usuario,
                     delete_usuario, update_usuario, usuario_existente)
 import logging
 from api.auth_decorators import require_roles
+from core.permissions import rol_existe
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(levelname)s - %(message)s')
@@ -49,6 +50,8 @@ def setup_usuario_routes(app, mongo):
 
         if usuario_existente(mongo, user, email):
             return jsonify({'error': 'El usuario ya existe.'}), 400
+        if not rol_existe(mongo, role):
+            return jsonify({'error': f'El rol {role} no existe en tu empresa (pudo haber sido eliminado).'}), 400
 
         return create_usuario(mongo, user, password, empleado_id, role,
                                email=email, areas_administradas=areas_administradas)
@@ -74,6 +77,8 @@ def setup_usuario_routes(app, mongo):
         password             = data.get('password')
         role                 = data.get('role')
         areas_administradas  = data.get('areas_administradas')
+        if role and not rol_existe(mongo, role):
+            return jsonify({'error': f'El rol {role} no existe en tu empresa (pudo haber sido eliminado).'}), 400
         antes = _cuenta_por_id(id)
         resp = update_usuario(mongo, id, user, password, role,
                                areas_administradas=areas_administradas, identity=get_jwt())
