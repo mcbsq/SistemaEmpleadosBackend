@@ -135,3 +135,18 @@ def test_cadena_mando_tres_niveles_arriba():
     r = app.test_client().get(f"/perfil/{ids[3]}/cadena-mando",
                               headers={"Authorization": f"Bearer {_token(app, 'EMPLOYEE')}"})
     assert [n["Nombre"] for n in r.get_json()["directos"]] == ["N4"]
+
+
+def test_organigrama_por_jefe_inmediato_sin_bajas():
+    mongo = FakeMongo()
+    jefe = _empleado(mongo, "Jefa")["_id"]
+    sub = _empleado(mongo, "Sub")["_id"]
+    baja = _empleado(mongo, "Ido", estado="baja")["_id"]
+    mongo.db.rh.insert_one({"empleado_id": sub, "JefeInmediato_id": str(jefe), "Puesto": "Dev"})
+    mongo.db.rh.insert_one({"empleado_id": jefe, "JefeInmediato_id": str(baja)})
+    app = _app(mongo)
+    r = app.test_client().get("/organigrama", headers={"Authorization": f"Bearer {_token(app, 'EMPLOYEE')}"})
+    nodos = {n["Nombre"]: n for n in r.get_json()}
+    assert set(nodos) == {"Jefa", "Sub"}
+    assert nodos["Sub"]["JefeInmediato_id"] == str(jefe)
+    assert nodos["Jefa"]["JefeInmediato_id"] == ""  # su jefe está de baja

@@ -17,6 +17,7 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt
 
 from core.audit import registrar_auditoria
+from core.permissions import require_roles_or_permission
 from core.visibilidad_perfil import acceso_perfil, _str_id, ROLES_RH, tarjeta_directorio
 
 # Foto de perfil: el frontend la recorta y comprime (512 px, JPEG/WebP) antes
@@ -98,6 +99,39 @@ def setup_perfil_routes(app, mongo):
                 tarjetas.append(t)
         tarjetas.sort(key=lambda t: (t.get('Nombre', '') + ' ' + t.get('ApelPaterno', '')).lower())
         return jsonify(tarjetas), 200
+
+    # Organigrama por jerarquía: una entrada por persona activa con su jefe
+    # inmediato (el de su ficha laboral). El frontend arma el árbol; quien no
+    # tiene jefe ni equipo queda aparte como "sin jefe asignado".
+    @app.route('/organigrama', methods=['GET'])
+    @require_roles_or_permission(mongo, 'ver_organigrama', 'EMPLOYEE', 'ADMIN', 'SUPER_ADMIN', 'CONTADOR',
+                                 'PROJECT_MANAGER', 'JEFE_AREA', 'MEDICO')
+    def organigrama_route():
+        empleados = list(mongo.db.empleados.find({'estado': {'$nin': ['pendiente', 'baja']}}, {
+            'Nombre': 1, 'ApelPaterno': 1, 'NombrePreferido': 1, 'Fotografias': {'$slice': 1},
+            'Fotografia': 1, 'depto_id': 1}))
+        activos = {str(e['_id']) for e in empleados}
+        rhs = {str(r.get('empleado_id')): r for r in mongo.db.rh.find(
+            {'empleado_id': {'$in': [e['_id'] for e in empleados]}},
+            {'empleado_id': 1, 'Puesto': 1, 'Departamento': 1, 'JefeInmediato_id': 1})}
+        nodos = []
+        for e in empleados:
+            k = str(e['_id'])
+            rh = rhs.get(k, {})
+            jefe = _str_id(rh.get('JefeInmediato_id'))
+            fotos = e.get('Fotografias') or []
+            depto = rh.get('Departamento') or e.get('depto_id') or ''
+            nodos.append({
+                '_id':          k,
+                'Nombre':       e.get('NombrePreferido') or e.get('Nombre', ''),
+                'ApelPaterno':  e.get('ApelPaterno', ''),
+                'Foto':         fotos[0] if fotos else e.get('Fotografia'),
+                'Puesto':       rh.get('Puesto', ''),
+                'Departamento': '' if str(depto).strip().lower() == 'sin asignar' else depto,
+                # Un jefe dado de baja o inexistente no cuelga a nadie del árbol.
+                'JefeInmediato_id': jefe if jefe in activos and jefe != k else '',
+            })
+        return jsonify(nodos), 200
 
     # Mini organigrama del perfil: la persona, su cadena de mando (hasta
     # `niveles` jefes hacia arriba) y quiénes le reportan directamente.
