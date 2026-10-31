@@ -68,6 +68,23 @@ def setup_login_routes(app, mongo):
         limpiar(respuesta)
         return respuesta, 200
 
+    # "¿Olvidaste tu contraseña?" con código por correo (ver recuperacion.py).
+    @app.route('/recuperar/codigo', methods=['POST'])
+    def recuperar_codigo_route():
+        from .recuperacion import solicitar_codigo
+        return solicitar_codigo(mongo, request.get_json(silent=True) or {}, ip_cliente(request))
+
+    @app.route('/recuperar/verificar', methods=['POST'])
+    def recuperar_verificar_route():
+        from .recuperacion import verificar_codigo
+        return verificar_codigo(mongo, request.get_json(silent=True) or {})
+
+    @app.route('/recuperar/confirmar', methods=['POST'])
+    def recuperar_confirmar_route():
+        from .recuperacion import confirmar
+        return confirmar(mongo, request.get_json(silent=True) or {})
+
+    # Flujo anterior (Aegis manda un enlace); lo sigue usando la app móvil.
     @app.route('/recuperar-contrasena', methods=['POST'])
     def recuperar_route():
         from .sesion import solicitar_recuperacion

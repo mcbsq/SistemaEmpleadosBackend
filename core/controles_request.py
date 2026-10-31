@@ -17,6 +17,9 @@ from core.sesiones import acceso_en_cache, fijar_rol, marcar_acceso, obtener, re
 _PUBLICAS = {
     ("POST", "/login"),
     ("POST", "/recuperar-contrasena"),
+    ("POST", "/recuperar/codigo"),
+    ("POST", "/recuperar/verificar"),
+    ("POST", "/recuperar/confirmar"),
     ("GET", "/health"),
     ("GET", "/session"),
     ("POST", "/public/access-requests"),
@@ -140,7 +143,7 @@ def aplicar(mongo, claims):
         cuerpo = request.get_json(silent=True) or {}
         pedido = str(cuerpo.get("org_id") or "").strip().lower()
         if pedido and g.org_id and pedido != str(g.org_id).lower() and not getattr(g, "modo_soporte", False):
-            if ruta not in ("/login", "/recuperar-contrasena"):
+            if ruta not in ("/login", "/recuperar-contrasena", "/recuperar/codigo", "/recuperar/confirmar"):
                 return jsonify({"error": "No puedes cambiar de empresa en esta sesión."}), 403
 
     if ruta not in _CON_CLAVE and (sesion or claims):
