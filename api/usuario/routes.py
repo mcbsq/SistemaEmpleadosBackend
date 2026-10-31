@@ -3,7 +3,7 @@ from bson.objectid import ObjectId
 from bson.errors import InvalidId
 from flask_jwt_extended import get_jwt
 from .logic import (create_usuario, get_usuarios, get_usuario,
-                    delete_usuario, update_usuario, usuario_existente)
+                    delete_usuario, update_usuario, usuario_existente, ver_temporal)
 import logging
 from api.auth_decorators import require_roles
 from core.permissions import rol_existe
@@ -92,6 +92,13 @@ def setup_usuario_routes(app, mongo):
             from api.login.sesion import marcar_atendida
             marcar_atendida(mongo, antes.get('user'), g.org_id)
         return resp
+
+    # Contraseña temporal vigente (hasta que la persona la cambie), para
+    # volver a entregarla. Quien puede dar de alta cuentas puede consultarla.
+    @app.route('/usuario/<id>/temporal', methods=['GET'])
+    @require_roles('SUPER_ADMIN', 'RH')
+    def ver_temporal_route(id):
+        return ver_temporal(mongo, id, identity=get_jwt())
 
     @app.route('/usuario/<id>', methods=['DELETE'])
     @require_roles('SUPER_ADMIN')

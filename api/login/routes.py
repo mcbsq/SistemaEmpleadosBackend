@@ -84,6 +84,9 @@ def setup_login_routes(app, mongo):
             resp = change_password(mongo, claims, data.get('current_password'), data.get('new_password'))
             status = resp[1] if isinstance(resp, tuple) else getattr(resp, 'status_code', 200)
             if status == 200:
+                # Ya definió su contraseña: la temporal guardada deja de existir.
+                from core import temporal
+                temporal.olvidar(mongo, {"user": claims.get('user'), "org_id": claims.get('org_id')})
                 # Contraseña nueva = todos los celulares vuelven a pedir login.
                 from api.dispositivos.logic import revocar_de_usuario
                 revocar_de_usuario(mongo, claims.get('user'), claims.get('org_id'), 'cambio de contraseña')
