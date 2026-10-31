@@ -18,7 +18,8 @@ from werkzeug.security import generate_password_hash
 import logging
 
 from core.aegis_config import get_aegis_settings
-from core.aegis_client import (aegis_admin_create_user, aegis_admin_reset_password,
+from core import temporal
+from core.aegis_client import (aegis_admin_create_user, aegis_admin_reset_password, aegis_admin_recovery_email,
                                aegis_admin_list_users, aegis_admin_retirar_acceso_producto)
 from core.mailer import build_tenant_login_url, send_temp_password_email
 from core.audit import registrar_auditoria
@@ -32,6 +33,9 @@ def _serialize(doc):
     if doc.get('empleado_id') and not isinstance(doc['empleado_id'], str):
         doc['empleado_id'] = str(doc['empleado_id'])
     doc.pop('password', None)
+    # La temporal nunca viaja en listados: solo se dice si hay una guardada
+    # (se consulta aparte, con auditoría, en GET /usuario/<id>/temporal).
+    doc['tiene_temporal'] = bool(doc.pop('temp_password_cifrada', None))
     return doc
 
 
@@ -153,6 +157,9 @@ def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE', email=No
                 'aegis_user_id':       aegis_id,
                 'areas_administradas': areas,
             }
+            if temp_password:
+                # Consultable en Cuentas hasta que la persona la cambie.
+                nuevo.update(temporal.campos_guardar(temp_password))
         else:
             nuevo = {
                 'user':                user.strip(),
@@ -173,18 +180,17 @@ def create_usuario(mongo, user, password, empleado_id, role='EMPLOYEE', email=No
             'areas_administradas': areas,
         }
         if temp_password:
-            # La contraseña la generó Aegis. Si hay SMTP configurado se envía
-            # al correo del empleado; si no (o si falla), se devuelve en la
-            # respuesta para que el admin la entregue en mano.
+            # La contraseña la generó Aegis. Siempre vuelve a quien dio de
+            # alta (se muestra en un pop-up y queda en Cuentas); además se
+            # envía al correo del empleado si hay servicio de correo.
             login_url = build_tenant_login_url(getattr(g, "org_id", None))
+            respuesta['temp_password'] = temp_password
+            respuesta['login_url'] = login_url
             if send_temp_password_email(email_clean, user.strip(), temp_password, login_url=login_url):
                 respuesta['email_sent'] = True
-                respuesta['login_url'] = login_url
-                respuesta['message'] = (f'Usuario creado. La contraseña temporal se envió a '
+                respuesta['message'] = (f'Usuario creado. También se envió la contraseña temporal a '
                                         f'{email_clean}; deberá cambiarla al iniciar sesión.')
             else:
-                respuesta['temp_password'] = temp_password
-                respuesta['login_url'] = login_url
                 respuesta['message'] = ('Usuario creado. Entrega la contraseña temporal '
                                         'al empleado; deberá cambiarla al iniciar sesión.')
         return jsonify(respuesta), 201
@@ -214,6 +220,11 @@ def get_usuarios(mongo):
                             "is_active":            au.get("is_active"),
                             "must_change_password": au.get("must_change_password"),
                         }
+                        # Ya definió su contraseña (en este sistema o directo
+                        # en Aegis): la temporal guardada deja de existir.
+                        if d.get("tiene_temporal") and au.get("must_change_password") is False:
+                            temporal.olvidar(mongo, {"_id": ObjectId(d["_id"])})
+                            d["tiene_temporal"] = False
                     else:
                         # Sin vínculo o la identidad ya no existe en Aegis:
                         # este usuario no puede iniciar sesión en modo Aegis.
@@ -223,6 +234,32 @@ def get_usuarios(mongo):
     except Exception as e:
         logging.error("Error obteniendo usuarios: %s", e)
         return jsonify({'error': str(e)}), 500
+
+
+def ver_temporal(mongo, id, identity=None):
+    """
+    La contraseña temporal vigente de una cuenta, para entregarla a la
+    persona. Solo existe mientras no la haya cambiado. Cada consulta queda
+    en la auditoría (quién la vio, nunca el valor).
+    """
+    try:
+        doc = mongo.db.usuario.find_one({'_id': ObjectId(id)})
+    except (InvalidId, TypeError):
+        return jsonify({'error': 'ID inválido'}), 400
+    if not doc:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+    valor = temporal.leer(doc)
+    if not valor:
+        return jsonify({'error': 'Esta cuenta no tiene una contraseña temporal vigente. '
+                                 'Si la persona no puede entrar, restablécela.'}), 404
+    identity = identity if isinstance(identity, dict) else {}
+    registrar_auditoria(mongo, identity.get('user'), identity.get('role'), 'read', 'usuario', id,
+                        detalle=f"Consultó la contraseña temporal de {doc.get('user','')} (sin registrar el valor)")
+    return jsonify({
+        'user': doc.get('user'), 'email': doc.get('email'), 'temp_password': valor,
+        'generada_en': doc.get('temp_password_generada_en'),
+        'login_url': build_tenant_login_url(getattr(g, "org_id", None)),
+    }), 200
 
 
 def get_usuario(mongo, id):
@@ -271,7 +308,25 @@ def update_usuario(mongo, id, user=None, password=None, role=None, areas_adminis
                 if err:
                     body, status = err
                     logging.warning("Aegis reset-password: %s %s", status, body)
-                    return jsonify(body) if isinstance(body, dict) else jsonify({'error': str(body)}), status
+                    if status != 403:
+                        return jsonify(body) if isinstance(body, dict) else jsonify({'error': str(body)}), status
+                    # Aegis no deja generar temporales para otra persona: lo
+                    # que sí permite es mandarle su enlace de recuperación.
+                    err2 = aegis_admin_recovery_email(str(doc["aegis_user_id"]), tenant_id=g.org_id)
+                    if err2:
+                        logging.warning("Aegis recovery-email: %s %s", err2[1], err2[0])
+                        return jsonify({'error': 'Aegis no permite generar una contraseña temporal ni pudo enviar '
+                                                 'el enlace de recuperación. Intenta más tarde.'}), 502
+                    actor = identity.get('user') if isinstance(identity, dict) else None
+                    registrar_auditoria(mongo, actor, identity.get('role') if isinstance(identity, dict) else None,
+                                        "update", "usuario", id,
+                                        detalle=f"Enlace de recuperación de Aegis enviado a {doc.get('user','')}")
+                    return jsonify({
+                        'recovery_email_sent': True,
+                        'message': (f'Aegis no permite generar contraseñas temporales para otra persona. '
+                                    f'Le envió a {doc.get("email") or doc.get("user")} un enlace para elegir su contraseña.'),
+                    }), 200
+                update.update(temporal.campos_guardar(temp_password))
             elif s["login_enabled"]:
                 return jsonify({
                     'error': 'Usuario sin vínculo Aegis; no se puede actualizar la contraseña aquí.',
@@ -294,15 +349,14 @@ def update_usuario(mongo, id, user=None, password=None, role=None, areas_adminis
                                  detalle=f"Contraseña restablecida para {doc.get('user','')} (sin registrar el valor)")
             destino = doc.get('email')
             login_url = build_tenant_login_url(getattr(g, "org_id", None))
+            respuesta['temp_password'] = temp_password
+            respuesta['login_url'] = login_url
             if destino and send_temp_password_email(
                 destino, doc.get('user', ''), temp_password, login_url=login_url
             ):
                 respuesta['email_sent'] = True
-                respuesta['login_url'] = login_url
-                respuesta['message'] = f'Contraseña temporal generada y enviada a {destino}.'
+                respuesta['message'] = f'Contraseña temporal generada; también se envió a {destino}.'
             else:
-                respuesta['temp_password'] = temp_password
-                respuesta['login_url'] = login_url
                 respuesta['message'] = ('Contraseña temporal generada. Entrégala al empleado; '
                                         'deberá cambiarla al iniciar sesión.')
         return jsonify(respuesta), 200

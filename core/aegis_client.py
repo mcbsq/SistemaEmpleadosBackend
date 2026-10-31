@@ -492,3 +492,22 @@ def aegis_admin_asignar_acceso_producto(
     if r.status_code in (200, 204):
         return None
     return (_cuerpo(r), r.status_code)
+
+def aegis_admin_recovery_email(aegis_user_id: str, tenant_id: Optional[str] = None) -> Optional[Tuple[Any, int]]:
+    """
+    POST /v1/admin/users/{id}/recovery-email: Aegis le manda a la persona su
+    enlace de recuperación. Es lo que Aegis permite cuando niega generar una
+    temporal para otra persona (403 en reset-password). Retorna None si OK.
+    """
+    s = get_aegis_settings()
+    if not s["admin_enabled"]:
+        return ({"error": "AEGIS_API_KEY no configurada"}, 503)
+    url = f"{s['base_url']}/v1/admin/users/{aegis_user_id}/recovery-email"
+    try:
+        r = requests.post(url, headers=_admin_headers(tenant_id), timeout=s["timeout"])
+    except requests.RequestException as e:
+        logger.error("Aegis recovery-email: %s", e)
+        return ({"error": "Aegis admin no disponible"}, 503)
+    if r.status_code in (200, 201, 202, 204):
+        return None
+    return (_cuerpo(r), r.status_code)
