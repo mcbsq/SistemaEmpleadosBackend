@@ -12,6 +12,8 @@ venv.bak/
 
 # --- Variables de Entorno (SEGURIDAD) ---
 .env
+.env.*
+!.env.example
 .flaskenv
 
 # --- IDEs ---
